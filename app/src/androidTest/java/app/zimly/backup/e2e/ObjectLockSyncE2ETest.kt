@@ -1,6 +1,5 @@
 package app.zimly.backup.e2e
 
-import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
@@ -16,6 +15,7 @@ import app.zimly.backup.data.db.ZimlyDatabase
 import app.zimly.backup.data.db.remote.Remote
 import app.zimly.backup.data.db.remote.SyncDirection
 import app.zimly.backup.data.media.ContentType
+import app.zimly.backup.permission.permissionProvider
 import app.zimly.backup.sync.SyncOutputs
 import app.zimly.backup.sync.SyncWorker
 import io.minio.GetObjectArgs
@@ -44,21 +44,33 @@ import kotlin.time.Duration.Companion.minutes
  * enqueued on the app's WorkManager, the upload sync service and the S3 client. Then it checks over
  * S3 that both objects arrived intact and locked.
  *
- * Runs only when a host script has written its configuration to [CONFIG_PATH] on the device
- * (see ~/.claude/scripts/zimly-backup/2026-11-20-*-android-e2e.sh); otherwise it is skipped.
- * The file is JSON with endpoint, region, bucket, key and secret. It's read through the shell user
- * (apps can't read /data/local/tmp) and deleted straight after, so credentials never appear on a
- * command line or in instrumentation arguments.
+ * Runs only when its configuration is on the device at [CONFIG_PATH]; otherwise it skips itself,
+ * so ordinary `connectedAndroidTest` runs are unaffected. The file is JSON:
+ *
+ * ```json
+ * {"endpoint": "https://s3.<region>.example.com", "region": "<region>", "bucket": "<bucket>",
+ *  "key": "<access key>", "secret": "<secret key>"}
+ * ```
+ *
+ * The bucket needs Object Lock with a default GOVERNANCE retention, and the key needs read, write
+ * and read-retention access to it. Write the file through adb's stdin, so no credential appears
+ * on a command line, then run only this test:
+ *
+ * ```sh
+ * jq -nc ... | adb shell 'umask 077; cat > /data/local/tmp/zimly-e2e.json'
+ * ./gradlew :app:connectedDebugAndroidTest \
+ *   -Pandroid.testInstrumentationRunnerArguments.class=app.zimly.backup.e2e.ObjectLockSyncE2ETest
+ * ```
+ *
+ * The test reads the file as the shell user (apps can't read /data/local/tmp) and deletes it
+ * straight away, so the credentials never reach instrumentation arguments either.
  */
 @RunWith(AndroidJUnit4::class)
 class ObjectLockSyncE2ETest {
 
+    /** The media permissions the app itself asks for on this Android version. */
     @get:Rule
-    val permissions: GrantPermissionRule = GrantPermissionRule.grant(
-        Manifest.permission.READ_MEDIA_IMAGES,
-        Manifest.permission.READ_MEDIA_VIDEO,
-        Manifest.permission.ACCESS_MEDIA_LOCATION,
-    )
+    val permissions: GrantPermissionRule = GrantPermissionRule.grant(*permissionProvider())
 
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val collection = "ZimlyE2E${System.currentTimeMillis()}"
