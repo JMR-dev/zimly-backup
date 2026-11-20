@@ -1,7 +1,7 @@
 name: Linode Compatibility
 on:
   workflow_dispatch:
-  schedule: ## Schedule the job to run at 8am on Sun.
+  schedule: ## Run at 00:08 UTC on Sundays.
     - cron: '8 0 * * Sun'
 
 jobs:

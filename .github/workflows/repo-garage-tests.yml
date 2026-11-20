@@ -1,7 +1,7 @@
 name: Garage Compatibility
 on:
   workflow_dispatch:
-  schedule: ## Schedule the job to run at 8am on Mon, Thu.
+  schedule: ## Run at 00:08 UTC on Mondays and Thursdays.
     - cron: '8 0 * * Mon,Thu'
 
 jobs:
