@@ -53,7 +53,12 @@ class MinioRepository(
     private val secret: String,
     private val bucket: String,
     private val region: String? = null,
-    private val virtualHostedStyle: Boolean = false
+    private val virtualHostedStyle: Boolean = false,
+    /**
+     * Base HTTP client. Each upload derives its own progress-tracking client from it, so they share
+     * one connection pool. Tests pass a client that trusts their self-signed certificate.
+     */
+    private val httpClient: OkHttpClient = client(),
 ) : S3Repository {
 
     /**
@@ -73,7 +78,7 @@ class MinioRepository(
     private fun mc(uploadProgressTracker: ProgressTracker? = null): MinioAsyncClient {
         try {
             val client = MinioAsyncClient.builder()
-                .httpClient(client(uploadProgressTracker))
+                .httpClient(httpClient.withUploadProgress(uploadProgressTracker))
                 .endpoint(url)
                 .region(region) // This might override some AWS stuff happening inside #endpoint()
                 .credentials(key, secret)
@@ -100,20 +105,27 @@ class MinioRepository(
         fun client(uploadProgressTracker: ProgressTracker? = null): OkHttpClient {
             val timeout = TimeUnit.MINUTES.toMillis(5)
 
-            val builder = OkHttpClient()
+            return OkHttpClient()
                 .newBuilder()
                 .connectTimeout(timeout, TimeUnit.MILLISECONDS)
                 .writeTimeout(timeout, TimeUnit.MILLISECONDS)
                 .readTimeout(timeout, TimeUnit.MILLISECONDS)
                 .protocols(listOf(Protocol.HTTP_1_1))
-
-            // attach interceptor if given
-            uploadProgressTracker?.let { builder.addInterceptor(UploadProgressInterceptor(it)) } // TODO networkInterceptor?
-            // Alternatively attach a builder#eventListenerFactory and listen to requestBodyEnd, but same problems
-            // with request body returning too early. Might still be slicker than the interceptor
-
-            return builder.build()
+                .build()
+                .withUploadProgress(uploadProgressTracker)
         }
+
+        /**
+         * This client plus an [UploadProgressInterceptor] reporting to [tracker], or the client
+         * itself when there's no tracker.
+         *
+         * TODO networkInterceptor? Alternatively attach a builder#eventListenerFactory and listen to
+         * requestBodyEnd, but same problems with request body returning too early. Might still be
+         * slicker than the interceptor.
+         */
+        private fun OkHttpClient.withUploadProgress(tracker: ProgressTracker?): OkHttpClient =
+            if (tracker == null) this
+            else newBuilder().addInterceptor(UploadProgressInterceptor(tracker)).build()
     }
 
 
