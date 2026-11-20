@@ -4,10 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.runBlocking
-import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -70,26 +67,11 @@ class ObjectLockUploadDeviceTest {
 
     private fun repository(stub: ObjectLockS3Stub): MinioRepository {
         server.dispatcher = stub
-        val httpClient = serveSelfSignedHttps()
+        val httpClient = server.serveSelfSignedHttps()
         server.start()
         return MinioRepository(
             server.url("/").toString(), "key", "secret", "locked-bucket", "us-east-1", httpClient = httpClient
         )
-    }
-
-    /** Serves HTTPS with a fresh self-signed certificate; returns a client that trusts only it. */
-    private fun serveSelfSignedHttps(): OkHttpClient {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName(server.hostName)
-            .build()
-        server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
-
-        val trust = HandshakeCertificates.Builder()
-            .addTrustedCertificate(certificate.certificate)
-            .build()
-        return MinioRepository.client().newBuilder()
-            .sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
-            .build()
     }
 
     private companion object {

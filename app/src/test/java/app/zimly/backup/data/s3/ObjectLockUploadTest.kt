@@ -9,10 +9,7 @@ import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockWebServer
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -167,33 +164,12 @@ class ObjectLockUploadTest(private val scheme: String) {
 
     private fun repository(stub: ObjectLockS3Stub): MinioRepository {
         server.dispatcher = stub
-        val httpClient = if (scheme == HTTPS) serveSelfSignedHttps() else MinioRepository.client()
+        val httpClient = if (scheme == HTTPS) server.serveSelfSignedHttps() else MinioRepository.client()
         server.start()
         // An explicit region keeps the SDK from asking the stub for the bucket location.
         return MinioRepository(
             server.url("/").toString(), "key", "secret", bucket, "us-east-1", httpClient = httpClient
         )
-    }
-
-    /**
-     * Makes [server] serve HTTPS with a freshly generated self-signed certificate, and returns a
-     * client that trusts exactly that certificate.
-     */
-    private fun serveSelfSignedHttps(): OkHttpClient {
-        val certificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName(server.hostName)
-            .build()
-        val serverCertificates = HandshakeCertificates.Builder()
-            .heldCertificate(certificate)
-            .build()
-        server.useHttps(serverCertificates.sslSocketFactory(), false)
-
-        val clientCertificates = HandshakeCertificates.Builder()
-            .addTrustedCertificate(certificate.certificate)
-            .build()
-        return MinioRepository.client().newBuilder()
-            .sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager)
-            .build()
     }
 
     private fun randomBytes(size: Int): ByteArray = Random(size).nextBytes(size)

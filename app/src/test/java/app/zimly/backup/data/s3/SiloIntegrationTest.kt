@@ -11,9 +11,6 @@ import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.test.runTest
-import okhttp3.OkHttpClient
-import okhttp3.tls.HandshakeCertificates
-import okhttp3.tls.HeldCertificate
 import org.junit.AfterClass
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -84,20 +81,9 @@ class SiloIntegrationTest {
         private const val CERTS_DIR = "/certs"
 
         /** Self-signed, valid for the addresses Testcontainers exposes the container on. */
-        private val certificate: HeldCertificate = HeldCertificate.Builder()
-            .addSubjectAlternativeName("localhost")
-            .addSubjectAlternativeName("127.0.0.1")
-            .build()
+        private val certificate = selfSignedCertificate("localhost", "127.0.0.1")
 
-        /** Trusts exactly [certificate]. */
-        private val trustingClient: OkHttpClient = HandshakeCertificates.Builder()
-            .addTrustedCertificate(certificate.certificate)
-            .build()
-            .let { trust ->
-                MinioRepository.client().newBuilder()
-                    .sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
-                    .build()
-            }
+        private val trustingClient = clientTrusting(certificate)
 
         private val silo: MinIOContainer =
             MinIOContainer(DockerImageName.parse(IMAGE).asCompatibleSubstituteFor("minio/minio"))
