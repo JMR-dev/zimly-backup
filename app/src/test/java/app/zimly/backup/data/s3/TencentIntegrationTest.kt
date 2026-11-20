@@ -66,7 +66,7 @@ class TencentIntegrationTest {
 
         // WHEN
         val res =
-            s3Repository.put({ stream }, "testObj", "image/png", size)
+            s3Repository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .toList()
 

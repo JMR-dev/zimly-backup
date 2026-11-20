@@ -34,7 +34,7 @@ class LinodeIntegrationTest {
 
         // WHEN
         val res =
-            repository.put({ stream }, "testObj", "image/png", size)
+            repository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .toList()
 

@@ -45,6 +45,11 @@ class GarageIntegrationTest {
                 MountableFile.forClasspathResource("/test-container/garage.toml"),
                 "/etc/garage.toml"
             )
+            // bootstrapGarage() execs into the container. On rootless Podman, the Docker-compatible
+            // API records the service's own OOM score (e.g. 200) in the container spec, and crun is
+            // then denied writing it on every exec. Asking for the maximum score is always allowed,
+            // and only makes this throwaway container the first to go under memory pressure.
+            withCreateContainerCmdModifier { it.hostConfig?.withOomScoreAdj(1000) }
         }
 
     @Before
@@ -72,7 +77,7 @@ class GarageIntegrationTest {
         val size = stream.available().toLong()
 
         val lastProgress =
-            minioRepository.put({ stream }, "testObj", "image/png", size)
+            minioRepository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .last()
 

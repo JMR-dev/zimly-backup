@@ -53,7 +53,7 @@ class MinioIntegrationTest {
         val size = stream.available().toLong()
 
         val lastProgress =
-            minioRepository.put({ stream }, "testObj", "image/png", size)
+            minioRepository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .last()
 
