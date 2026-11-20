@@ -2,6 +2,7 @@ package app.zimly.backup.sync
 
 import android.net.Uri
 import android.util.Log
+import app.zimly.backup.SILO_IMAGE
 import app.zimly.backup.readTestResource
 import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.WriteableContentResolver
@@ -36,10 +37,8 @@ class DownloadSyncServiceTest {
     private lateinit var localContentResolver: WriteableContentResolver
     private lateinit var minioRepository: MinioRepository
 
-    private val containerName = "minio/minio:latest"
-
     @get:Rule
-    val minioContainer: MinIOContainer = MinIOContainer(containerName)
+    val minioContainer: MinIOContainer = MinIOContainer(SILO_IMAGE)
         .withUserName(minioUser)
         .withPassword(minioPwd)
 

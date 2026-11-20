@@ -6,6 +6,7 @@ import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.LocalContentResolver
 import app.zimly.backup.data.s3.MinioRepository
 import app.zimly.backup.data.s3.S3Object
+import app.zimly.backup.SILO_IMAGE
 import app.zimly.backup.readTestResource
 import io.mockk.every
 import io.mockk.mockk
@@ -34,10 +35,8 @@ class UploadSyncServiceTest {
     private lateinit var localContentResolver: LocalContentResolver
     private lateinit var minioRepository: MinioRepository
 
-    private val containerName = "minio/minio:latest"
-
     @get:Rule
-    val minioContainer: MinIOContainer = MinIOContainer(containerName)
+    val minioContainer: MinIOContainer = MinIOContainer(SILO_IMAGE)
         .withUserName(minioUser)
         .withPassword(minioPwd)
 

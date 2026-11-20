@@ -1,6 +1,7 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.SILO_IMAGE
 import app.zimly.backup.readTestResource
 import io.mockk.every
 import io.mockk.mockkStatic
@@ -22,11 +23,10 @@ class MinioIntegrationTest {
     private val minioPwd = "testtest"
 
     private lateinit var minioRepository: MinioRepository
-    private val containerName = "minio/minio:latest"
     private val minioPort = 9000
 
     @get:Rule
-    val minioContainer: MinIOContainer = MinIOContainer(containerName)
+    val minioContainer: MinIOContainer = MinIOContainer(SILO_IMAGE)
         .withUserName(minioUser)
         .withPassword(minioPwd)
         .withExposedPorts(minioPort)

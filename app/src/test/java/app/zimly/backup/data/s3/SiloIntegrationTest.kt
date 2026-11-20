@@ -1,6 +1,7 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.SILO_IMAGE
 import app.zimly.backup.readTestResource
 import io.minio.MakeBucketArgs
 import io.minio.MinioClient
@@ -20,7 +21,6 @@ import org.junit.Test
 import org.testcontainers.containers.MinIOContainer
 import org.testcontainers.containers.wait.strategy.Wait
 import org.testcontainers.images.builder.Transferable
-import org.testcontainers.utility.DockerImageName
 import java.io.ByteArrayInputStream
 import kotlin.random.Random
 
@@ -73,7 +73,6 @@ class SiloIntegrationTest {
     }
 
     companion object {
-        private const val IMAGE = "pgsty/silo:RELEASE.2026-11-12T00-00-00Z"
         private const val USER = "test"
         private const val PASSWORD = "testtest"
         private const val BUCKET = "locked-bucket"
@@ -86,7 +85,7 @@ class SiloIntegrationTest {
         private val trustingClient = clientTrusting(certificate)
 
         private val silo: MinIOContainer =
-            MinIOContainer(DockerImageName.parse(IMAGE).asCompatibleSubstituteFor("minio/minio"))
+            MinIOContainer(SILO_IMAGE)
                 .withUserName(USER)
                 .withPassword(PASSWORD)
                 .withCopyToContainer(Transferable.of(certificate.certificatePem()), "$CERTS_DIR/public.crt")
