@@ -49,7 +49,8 @@ class SiloIntegrationTest {
 
     @Test
     fun `small upload to a locked bucket is stored and locked`() = runTest {
-        val image = javaClass.getResourceAsStream("/testdata/test_image.png")!!.use { it.readBytes() }
+        // test_image2.png is 0.6 MiB, below the 5 MiB part size, so this is one PutObject.
+        val image = javaClass.getResourceAsStream("/testdata/test_image2.png")!!.use { it.readBytes() }
         assertUploadedAndLocked("small.png", "image/png", image)
     }
 
