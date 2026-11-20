@@ -13,14 +13,19 @@ import io.minio.RemoveObjectsArgs
 import io.minio.StatObjectArgs
 import io.minio.StatObjectResponse
 import io.minio.messages.DeleteRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.future.await
+import kotlinx.coroutines.future.asDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okio.Buffer
@@ -35,6 +40,7 @@ import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.time.Duration.Companion.seconds
 
 
 data class S3Object(
@@ -96,6 +102,9 @@ class MinioRepository(
     companion object {
 
         private val TAG: String? = MinioRepository::class.simpleName
+
+        /** How long a cancelled upload waits for minio to abort, see [putObject]. */
+        private val CANCEL_SETTLE_TIMEOUT = 30.seconds
 
         /**
          * Creates a http client with optional [UploadProgressInterceptor].
@@ -323,6 +332,15 @@ class MinioRepository(
         }
     }
 
+    /**
+     * Uploads through minio-java's own putObject.
+     *
+     * minio aborts a failed multipart upload in a handler on the future putObject returns, and a
+     * cancelled future never runs that handler. So this waits without cancelling the future. If
+     * the caller is cancelled, it stops the source, minio fails at its next read and aborts, and
+     * this waits for that (up to [CANCEL_SETTLE_TIMEOUT]) before the caller closes the stream.
+     * A cancel during the last part can't stop it: that upload completes.
+     */
     private suspend fun putObject(
         client: MinioAsyncClient,
         stream: InputStream,
@@ -330,13 +348,32 @@ class MinioRepository(
         contentType: String,
         size: Long
     ) {
+        val source = StoppableInputStream(stream)
         val args = PutObjectArgs.builder()
             .bucket(bucket)
             .`object`(name)
             .contentType(contentType)
-            .stream(stream, size, -1)
+            .stream(source, size, -1)
             .build()
-        client.putObject(args).await()
+        // asDeferred: awaiting the Deferred can be cancelled without cancelling minio's future.
+        val upload = client.putObject(args).asDeferred()
+        try {
+            upload.await()
+        } catch (e: CancellationException) {
+            source.stop()
+            waitForMinioToSettle(upload)
+            throw e
+        }
+    }
+
+    /**
+     * Gives minio time to fail and abort after a cancel. If it takes longer (a stalled network
+     * waits out the client's timeouts), minio still aborts once it fails; this just stops waiting.
+     */
+    private suspend fun waitForMinioToSettle(upload: Deferred<*>) {
+        withContext(NonCancellable) {
+            withTimeoutOrNull(CANCEL_SETTLE_TIMEOUT) { upload.join() }
+        }
     }
 }
 

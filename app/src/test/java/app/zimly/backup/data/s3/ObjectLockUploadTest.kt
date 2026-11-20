@@ -136,6 +136,30 @@ class ObjectLockUploadTest(private val scheme: String) {
     }
 
     /**
+     * minio-java aborts its own multipart upload when the upload fails, but only if its future isn't
+     * cancelled first. Cancelling put() must stop minio at its next read and let that abort run,
+     * so no parts stay behind on the server and no object is completed after the cancel.
+     */
+    @Test
+    fun `cancelling an SDK multipart upload aborts it`() = runTest {
+        val stub = ObjectLockS3Stub(objectLockEnabled = true, holdPart = 1)
+        val streams = TrackedStreams(randomBytes(2 * FIVE_MIB + 1))
+        val repository = repository(stub)
+
+        val upload = launch(Dispatchers.IO) { upload(repository, streams) }
+        val held = withContext(Dispatchers.IO) { stub.partHeld.await(30, TimeUnit.SECONDS) }
+        assertTrue("part 1 reached the stub", held)
+        upload.cancel()
+        stub.releasePart.countDown()
+        upload.join()
+
+        assertEquals("one create", 1, stub.creates.size)
+        assertEquals(listOf("upload-1"), stub.aborts)
+        assertTrue("nothing stored", stub.objects.isEmpty())
+        assertTrue("streams closed", streams.allClosed)
+    }
+
+    /**
      * Uploads [bytes] and checks the stub stored exactly them, with the given content type, and that
      * progress reached 100% and every opened stream was closed.
      */
