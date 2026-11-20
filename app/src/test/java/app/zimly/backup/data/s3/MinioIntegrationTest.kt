@@ -1,6 +1,8 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.SILO_IMAGE
+import app.zimly.backup.readTestResource
 import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.flow.last
@@ -13,6 +15,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.testcontainers.containers.MinIOContainer
+import java.io.ByteArrayInputStream
 
 class MinioIntegrationTest {
 
@@ -20,11 +23,10 @@ class MinioIntegrationTest {
     private val minioPwd = "testtest"
 
     private lateinit var minioRepository: MinioRepository
-    private val containerName = "minio/minio:latest"
     private val minioPort = 9000
 
     @get:Rule
-    val minioContainer: MinIOContainer = MinIOContainer(containerName)
+    val minioContainer: MinIOContainer = MinIOContainer(SILO_IMAGE)
         .withUserName(minioUser)
         .withPassword(minioPwd)
         .withExposedPorts(minioPort)
@@ -48,12 +50,11 @@ class MinioIntegrationTest {
     @Test
     fun put() = runTest {
         val image = "/testdata/test_image.png"
-        val stream =
-            javaClass.getResourceAsStream(image) ?: throw Error("Could not open test resource.")
-        val size = stream.available().toLong()
+        val bytes = readTestResource(image)
+        val size = bytes.size.toLong()
 
         val lastProgress =
-            minioRepository.put(stream, "testObj", "image/png", size)
+            minioRepository.put({ ByteArrayInputStream(bytes) }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .last()
 

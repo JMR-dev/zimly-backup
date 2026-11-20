@@ -2,15 +2,22 @@ package app.zimly.backup.sync
 
 import android.content.Context
 import android.util.Log
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.Data
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import app.zimly.backup.data.db.ZimlyDatabase
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import java.io.IOException
+import java.time.Duration
 
 class SyncWorker(
     private val context: Context,
@@ -81,6 +88,19 @@ class SyncWorker(
 
     companion object {
         val TAG: String? = SyncWorker::class.simpleName
+
+        /**
+         * The work request that syncs [remoteId]: it waits for a network connection and retries
+         * with exponential backoff.
+         */
+        fun request(remoteId: Int): OneTimeWorkRequest =
+            OneTimeWorkRequestBuilder<SyncWorker>()
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofMinutes(1))
+                .setInputData(workDataOf(SyncInputs.REMOTE_CONFIGURATION_ID to remoteId))
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+                )
+                .build()
 
         // TODO: provider passed through constructor?
         suspend fun initSyncService(context: Context, inputData: Data): SyncService {

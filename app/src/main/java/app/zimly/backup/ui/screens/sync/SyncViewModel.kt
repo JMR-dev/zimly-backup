@@ -12,22 +12,16 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import androidx.work.BackoffPolicy
-import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkQuery
-import androidx.work.workDataOf
 import app.zimly.backup.data.db.ZimlyDatabase
 import app.zimly.backup.data.db.remote.RemoteDao
 import app.zimly.backup.data.db.remote.SyncDirection
 import app.zimly.backup.data.media.ContentType
 import app.zimly.backup.permission.DocumentsPermissionService
 import app.zimly.backup.permission.MediaPermissionService
-import app.zimly.backup.sync.SyncInputs
 import app.zimly.backup.sync.SyncOutputs
 import app.zimly.backup.sync.SyncService
 import app.zimly.backup.sync.SyncWorker
@@ -50,7 +44,6 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
-import java.time.Duration
 import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -323,19 +316,7 @@ class SyncViewModel(
                 status = Status.CALCULATING
             )
         }
-        val data = workDataOf(SyncInputs.REMOTE_CONFIGURATION_ID to remoteId)
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setBackoffCriteria(
-                BackoffPolicy.EXPONENTIAL,
-                Duration.ofMinutes(1)
-            ) // Exponentially retry
-            .setInputData(data)
-            .setConstraints(constraints)
-            .build()
+        val syncRequest = SyncWorker.request(remoteId)
 
         workManager.enqueueUniqueWork(uniqueWorkIdentifier, ExistingWorkPolicy.KEEP, syncRequest)
 

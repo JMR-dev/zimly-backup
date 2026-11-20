@@ -2,6 +2,8 @@ package app.zimly.backup.sync
 
 import android.net.Uri
 import android.util.Log
+import app.zimly.backup.SILO_IMAGE
+import app.zimly.backup.readTestResource
 import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.WriteableContentResolver
 import app.zimly.backup.data.s3.MinioRepository
@@ -19,6 +21,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.testcontainers.containers.MinIOContainer
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.time.LocalDateTime
@@ -34,10 +37,8 @@ class DownloadSyncServiceTest {
     private lateinit var localContentResolver: WriteableContentResolver
     private lateinit var minioRepository: MinioRepository
 
-    private val containerName = "minio/minio:latest"
-
     @get:Rule
-    val minioContainer: MinIOContainer = MinIOContainer(containerName)
+    val minioContainer: MinIOContainer = MinIOContainer(SILO_IMAGE)
         .withUserName(minioUser)
         .withPassword(minioPwd)
 
@@ -69,16 +70,14 @@ class DownloadSyncServiceTest {
 
         val path1 = "/testdata/$image1"
         val path2 = "/testdata/$image2"
-        val stream1 =
-            javaClass.getResourceAsStream(path1) ?: throw Error("Could not open test resource.")
-        val stream2 =
-            javaClass.getResourceAsStream(path2) ?: throw Error("Could not open test resource.")
-        val size1 = stream1.available().toLong()
-        val size2 = stream2.available().toLong()
+        val bytes1 = readTestResource(path1)
+        val bytes2 = readTestResource(path2)
+        val size1 = bytes1.size.toLong()
+        val size2 = bytes2.size.toLong()
         val totalSize = size1 + size2
 
-        minioRepository.put(stream1, image1, "image/png", stream1.available().toLong()).last()
-        minioRepository.put(stream2, image2, "image/png", stream2.available().toLong()).last()
+        minioRepository.put({ ByteArrayInputStream(bytes1) }, image1, "image/png", size1).last()
+        minioRepository.put({ ByteArrayInputStream(bytes2) }, image2, "image/png", size2).last()
 
         every { localContentResolver.listObjects() } returns emptyList()
         val out1 = ByteArrayOutputStream()

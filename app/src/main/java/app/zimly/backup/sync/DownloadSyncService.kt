@@ -5,6 +5,7 @@ import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.WriteableContentResolver
 import app.zimly.backup.data.s3.S3Object
 import app.zimly.backup.data.s3.S3Repository
+import app.zimly.backup.data.s3.percentageOf
 import io.minio.errors.ErrorResponseException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -103,8 +104,7 @@ class DownloadSyncService(
             .runningFold(SyncProgress.EMPTY) { acc, value ->
                 val sumTransferredBytes =
                     acc.transferredBytes + value.readBytes
-                // Divide by 0 safe-guard in case of empty file size(s)
-                val percentage = if (diff.totalBytes == 0L) 1f else sumTransferredBytes.toFloat() / diff.totalBytes
+                val percentage = percentageOf(sumTransferredBytes, diff.totalBytes)
                 SyncProgress(
                     transferredBytes = sumTransferredBytes,
                     transferredFiles,
