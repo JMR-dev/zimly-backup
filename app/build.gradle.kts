@@ -65,6 +65,12 @@ extensions.configure<ApplicationExtension> {
         }
     }
 
+    // Test doubles used by both JVM unit tests and on-device instrumented tests.
+    sourceSets {
+        getByName("test") { kotlin.directories.add("src/sharedTest/java") }
+        getByName("androidTest") { kotlin.directories.add("src/sharedTest/java") }
+    }
+
     dependenciesInfo {
 
         // Enabling this will add a metadata block signed with the Play Store key, preventing
@@ -168,6 +174,9 @@ dependencies {
     androidTestImplementation("androidx.work:work-testing:$workManagerVersion")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("io.mockk:mockk-android:1.14.9")
+    // On-device S3 uploads against ObjectLockS3Stub over HTTPS
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+    androidTestImplementation("com.squareup.okhttp3:okhttp-tls:5.5.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
