@@ -10,6 +10,8 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.CRC32
 import java.util.zip.CRC32C
@@ -25,12 +27,17 @@ import java.util.zip.Checksum
  *   `BadDigest`, a wrong `x-amz-checksum-*` gives `XAmzContentChecksumMismatch`.
  * * With [uppercaseAlgorithmOnly], CreateMultipartUpload accepts `x-amz-checksum-algorithm` only
  *   as an exact uppercase name, the way Garage does.
+ * * [failPart] answers that part number with 403 `AccessDenied`, an error nothing should retry.
+ * * [holdPart] blocks that part's response until [releasePart] is counted down, so a test can
+ *   cancel an upload mid-flight. [partHeld] is counted down when that request arrives.
  *
  * Path-style requests only: `/<bucket>/<key>`.
  */
 class ObjectLockS3Stub(
     private val objectLockEnabled: Boolean,
     private val uppercaseAlgorithmOnly: Boolean = false,
+    private val failPart: Int? = null,
+    private val holdPart: Int? = null,
 ) : Dispatcher() {
 
     data class StoredObject(val bytes: ByteArray, val contentType: String?)
@@ -49,6 +56,12 @@ class ObjectLockS3Stub(
 
     /** Upload IDs of every AbortMultipartUpload request. */
     val aborts = CopyOnWriteArrayList<String>()
+
+    /** Counted down when the request for [holdPart] arrives. */
+    val partHeld = CountDownLatch(1)
+
+    /** The [holdPart] request isn't answered until this is counted down. */
+    val releasePart = CountDownLatch(1)
 
     private val uploads = ConcurrentHashMap<String, Upload>()
     private val uploadCounter = AtomicInteger()
@@ -94,6 +107,13 @@ class ObjectLockS3Stub(
         val partNumber = url.queryParameter("partNumber")?.toIntOrNull()
             ?: return s3Error(400, "InvalidArgument", "Missing partNumber")
         val body = request.body.readByteArray()
+        if (partNumber == failPart) {
+            return s3Error(403, "AccessDenied", "Injected failure for part $partNumber")
+        }
+        if (partNumber == holdPart) {
+            partHeld.countDown()
+            releasePart.await(HOLD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
         integrityError(request, body)?.let { return it }
         upload.parts[partNumber] = body
         return accepted(request, body)
@@ -176,6 +196,7 @@ class ObjectLockS3Stub(
             "Content-MD5 OR x-amz-checksum- HTTP header is required for Put Object requests " +
                 "with Object Lock parameters"
 
+        private const val HOLD_TIMEOUT_SECONDS = 30L
         private const val S3_NAMESPACE = "http://s3.amazonaws.com/doc/2006-03-01/"
         private const val CHECKSUM_PREFIX = "x-amz-checksum-"
         private const val CHECKSUM_ALGORITHM_HEADER = "x-amz-checksum-algorithm"

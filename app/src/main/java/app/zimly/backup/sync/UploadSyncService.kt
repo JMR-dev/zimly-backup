@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.runningFold
@@ -91,11 +90,10 @@ class UploadSyncService(
         val totalBytes = diff.totalBytes
         var transferredFiles = 0
         diff.diff.asFlow()
-            .map { mediaObj -> Pair(mediaObj, localContentResolver.getInputStream(mediaObj.uri)) }
             .onEach { transferredFiles++ } // TODO too early, should happen after the upload
-            .flatMapConcat { (mediaObj, file) ->
+            .flatMapConcat { mediaObj ->
                 s3Repository.put(
-                    file,
+                    { localContentResolver.getInputStream(mediaObj.uri) },
                     mediaObj.path,
                     mediaObj.contentType,
                     mediaObj.size

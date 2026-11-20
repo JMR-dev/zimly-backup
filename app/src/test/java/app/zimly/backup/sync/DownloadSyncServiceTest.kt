@@ -77,8 +77,8 @@ class DownloadSyncServiceTest {
         val size2 = stream2.available().toLong()
         val totalSize = size1 + size2
 
-        minioRepository.put(stream1, image1, "image/png", stream1.available().toLong()).last()
-        minioRepository.put(stream2, image2, "image/png", stream2.available().toLong()).last()
+        minioRepository.put({ stream1 }, image1, "image/png", size1).last()
+        minioRepository.put({ stream2 }, image2, "image/png", size2).last()
 
         every { localContentResolver.listObjects() } returns emptyList()
         val out1 = ByteArrayOutputStream()

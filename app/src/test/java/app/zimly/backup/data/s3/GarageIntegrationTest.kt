@@ -67,7 +67,7 @@ class GarageIntegrationTest {
         val size = stream.available().toLong()
 
         val lastProgress =
-            minioRepository.put(stream, "testObj", "image/png", size)
+            minioRepository.put({ stream }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .last()
 

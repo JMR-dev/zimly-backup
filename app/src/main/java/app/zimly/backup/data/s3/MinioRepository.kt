@@ -18,6 +18,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
@@ -34,7 +35,6 @@ import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 
 data class S3Object(
@@ -292,8 +292,17 @@ class MinioRepository(
         }
     }
 
+    /**
+     * Uploads the object and reports [Progress]. [openStream] opens a fresh stream over the content
+     * each time it's called, because a retry has to read it again.
+     *
+     * minio-java names its checksum algorithm in lowercase (`crc32c`), which some servers, such as
+     * Garage, reject. Only then is the upload retried once, through [UppercaseChecksumUpload].
+     * Progress stays correct: it counts only successful PUT bodies, and the rejection comes at
+     * CreateMultipartUpload, before any part is sent.
+     */
     override suspend fun put(
-        stream: InputStream,
+        openStream: () -> InputStream,
         name: String,
         contentType: String,
         size: Long
@@ -303,32 +312,38 @@ class MinioRepository(
         launch {
             progressTracker.observe().collect { send(it) }
         }
-        suspendCoroutine { continuation ->
 
-            val param = PutObjectArgs.builder()
-                .bucket(bucket)
-                .`object`(name)
-                .contentType(contentType)
-                .stream(stream, size, -1)
-                .build()
-
-            mc(uploadProgressTracker = progressTracker).putObject(param)
-                .whenComplete { _, exception ->
-                    with(stream) { close() } // Instead of stream.close()
-                    if (exception == null) {
-                        continuation.resume(Unit)
-                    } else {
-                        continuation.resumeWithException(exception)
-                    }
-                }
+        val client = mc(uploadProgressTracker = progressTracker)
+        try {
+            openStream().use { putObject(client, it, name, contentType, size) }
+        } catch (e: Exception) {
+            if (!e.isChecksumAlgorithmRejection()) throw e
+            Log.i(TAG, "Retrying $name with an uppercase checksum algorithm: ${e.message}")
+            openStream().use { UppercaseChecksumUpload(client, bucket).upload(it, name, contentType, size) }
         }
+    }
+
+    private suspend fun putObject(
+        client: MinioAsyncClient,
+        stream: InputStream,
+        name: String,
+        contentType: String,
+        size: Long
+    ) {
+        val args = PutObjectArgs.builder()
+            .bucket(bucket)
+            .`object`(name)
+            .contentType(contentType)
+            .stream(stream, size, -1)
+            .build()
+        client.putObject(args).await()
     }
 }
 
 interface S3Repository {
     fun listObjects(): List<S3Object>
     suspend fun put(
-        stream: InputStream,
+        openStream: () -> InputStream,
         name: String,
         contentType: String,
         size: Long
