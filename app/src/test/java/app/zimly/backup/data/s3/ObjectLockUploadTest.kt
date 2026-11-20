@@ -5,20 +5,30 @@ import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.tls.HandshakeCertificates
+import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.junit.runners.Parameterized
 import java.io.ByteArrayInputStream
 import kotlin.random.Random
 
 /**
  * Uploads through [MinioRepository] against [ObjectLockS3Stub], which rejects PUTs without an
  * integrity header on an Object Lock bucket the way Backblaze B2 does.
+ *
+ * Runs over plain HTTP and over HTTPS with a self-signed certificate. B2 and AWS are HTTPS-only,
+ * and minio-java signs payloads differently there (`UNSIGNED-PAYLOAD` instead of a SHA-256).
  */
-class ObjectLockUploadTest {
+@RunWith(Parameterized::class)
+class ObjectLockUploadTest(private val scheme: String) {
 
     private val bucket = "locked-bucket"
     private val server = MockWebServer()
@@ -85,18 +95,54 @@ class ObjectLockUploadTest {
         val stored = stub.objects.getValue(name)
         assertArrayEquals(bytes, stored.bytes)
         assertEquals(contentType, stored.contentType)
+        assertTransport()
+    }
+
+    /** The first request went over TLS exactly when this run is the HTTPS one. */
+    private fun assertTransport() {
+        val handshake = server.takeRequest().handshake
+        if (scheme == HTTPS) assertNotNull("expected a TLS handshake", handshake) else assertEquals(null, handshake)
     }
 
     private fun repository(stub: ObjectLockS3Stub): MinioRepository {
         server.dispatcher = stub
+        val httpClient = if (scheme == HTTPS) serveSelfSignedHttps() else MinioRepository.client()
         server.start()
         // An explicit region keeps the SDK from asking the stub for the bucket location.
-        return MinioRepository(server.url("/").toString(), "key", "secret", bucket, "us-east-1")
+        return MinioRepository(
+            server.url("/").toString(), "key", "secret", bucket, "us-east-1", httpClient = httpClient
+        )
+    }
+
+    /**
+     * Makes [server] serve HTTPS with a freshly generated self-signed certificate, and returns a
+     * client that trusts exactly that certificate.
+     */
+    private fun serveSelfSignedHttps(): OkHttpClient {
+        val certificate = HeldCertificate.Builder()
+            .addSubjectAlternativeName(server.hostName)
+            .build()
+        val serverCertificates = HandshakeCertificates.Builder()
+            .heldCertificate(certificate)
+            .build()
+        server.useHttps(serverCertificates.sslSocketFactory(), false)
+
+        val clientCertificates = HandshakeCertificates.Builder()
+            .addTrustedCertificate(certificate.certificate)
+            .build()
+        return MinioRepository.client().newBuilder()
+            .sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager)
+            .build()
     }
 
     private fun randomBytes(size: Int): ByteArray = Random(size).nextBytes(size)
 
-    private companion object {
-        const val FIVE_MIB = 5 * 1024 * 1024
+    companion object {
+        private const val FIVE_MIB = 5 * 1024 * 1024
+        private const val HTTPS = "https"
+
+        @JvmStatic
+        @Parameterized.Parameters(name = "{0}")
+        fun schemes(): List<String> = listOf("http", HTTPS)
     }
 }

@@ -155,6 +155,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.testcontainers:minio:1.21.4")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:5.5.1") // self-signed certs for HTTPS tests
     testImplementation("io.mockk:mockk:1.14.9")
     testImplementation("androidx.test:core-ktx:1.7.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
