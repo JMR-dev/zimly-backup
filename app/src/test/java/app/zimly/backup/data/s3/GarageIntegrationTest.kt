@@ -3,16 +3,20 @@ package app.zimly.backup.data.s3
 import android.util.Log
 import io.mockk.every
 import io.mockk.mockkStatic
+import io.mockk.verify
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.test.runTest
 import org.hamcrest.CoreMatchers.`is`
 import org.hamcrest.MatcherAssert.assertThat
+import org.junit.Assert.assertArrayEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.utility.MountableFile
+import java.io.ByteArrayInputStream
+import kotlin.random.Random
 
 /**
  * This test will only pass if the region is configured in `garage.toml` to `s3_region = "us-east-1"`.
@@ -50,6 +54,7 @@ class GarageIntegrationTest {
         every { Log.v(any(), any()) } returns 0
         every { Log.d(any(), any()) } returns 0
         every { Log.i(any(), any()) } returns 0
+        every { Log.w(any(), any<String>(), any()) } returns 0
         every { Log.e(any(), any()) } returns 0
         every { Log.isLoggable(any(), any()) } returns false
 
@@ -75,6 +80,25 @@ class GarageIntegrationTest {
 
         val name = minioRepository.get("testObj").`object`()
         assertThat(name, `is`("testObj"))
+    }
+
+    /**
+     * Garage only accepts uppercase checksum algorithm names, and rejects minio-java's lowercase
+     * `crc32c` on CreateMultipartUpload. So uploads over 5 MiB only succeed through
+     * [UppercaseChecksumUpload]. The log check proves the retry ran. If Garage starts accepting
+     * lowercase names, that check (and only that check) will fail.
+     */
+    @Test
+    fun putMultipart() = runTest {
+        val bytes = Random(12).nextBytes(12 * 1024 * 1024)
+
+        val lastProgress =
+            minioRepository.put({ ByteArrayInputStream(bytes) }, "multipartObj", "application/octet-stream", bytes.size.toLong())
+                .last()
+
+        assertThat(lastProgress.percentage, `is`(1f))
+        assertArrayEquals(bytes, minioRepository.get("multipartObj").use { it.readBytes() })
+        verify { Log.i(any(), match { it.contains("uppercase checksum algorithm") }) }
     }
 
     /*
