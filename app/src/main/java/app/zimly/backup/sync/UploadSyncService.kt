@@ -5,18 +5,13 @@ import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.LocalContentResolver
 import app.zimly.backup.data.s3.S3Object
 import app.zimly.backup.data.s3.S3Repository
-import app.zimly.backup.data.s3.percentageOf
 import io.minio.errors.ErrorResponseException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.flatMapConcat
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.onStart
-import kotlinx.coroutines.flow.runningFold
+import kotlinx.coroutines.flow.map
 
 class UploadSyncService(
     private val s3Repository: S3Repository,
@@ -84,15 +79,11 @@ class UploadSyncService(
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
+    @OptIn(FlowPreview::class)
     override fun synchronize(): Flow<SyncProgress> = flow {
         val diff = calculateDiff()
-        val totalFiles = diff.totalObjects
-        val totalBytes = diff.totalBytes
-        var transferredFiles = 0
         diff.diff.asFlow()
-            .onEach { transferredFiles++ } // TODO too early, should happen after the upload
-            .flatMapConcat { mediaObj ->
+            .map { mediaObj ->
                 s3Repository.put(
                     { localContentResolver.getInputStream(mediaObj.uri) },
                     mediaObj.path,
@@ -100,22 +91,7 @@ class UploadSyncService(
                     mediaObj.size
                 )
             }
-            .runningFold(SyncProgress.EMPTY) { acc, value ->
-                val sumTransferredBytes =
-                    acc.transferredBytes + value.readBytes
-                val percentage = percentageOf(sumTransferredBytes, diff.totalBytes)
-                SyncProgress(
-                    transferredBytes = sumTransferredBytes,
-                    transferredFiles,
-                    percentage,
-                    value.bytesPerSec,
-                    totalFiles,
-                    totalBytes
-                )
-            }
-            .onStart {
-                emit(SyncProgress.EMPTY.copy(totalFiles = totalFiles, totalBytes = totalBytes))
-            }
+            .toSyncProgress(diff.totalObjects, diff.totalBytes)
             .debounce(debounce)
             .collect { emit(it) }
     }
