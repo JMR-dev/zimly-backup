@@ -196,6 +196,7 @@ tasks.withType<Test> {
                 "minio" -> includeTestsMatching("MinioIntegrationTest")
                 "garage" -> includeTestsMatching("GarageIntegrationTest")
                 "silo" -> includeTestsMatching("SiloIntegrationTest")
+                "b2" -> includeTestsMatching("B2IntegrationTest")
                 "tencent" -> includeTestsMatching("TencentIntegrationTest")
                 else -> includeTestsMatching("*IntegrationTest")
             }
