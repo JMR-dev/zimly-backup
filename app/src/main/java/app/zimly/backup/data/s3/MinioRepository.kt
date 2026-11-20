@@ -12,7 +12,7 @@ import io.minio.RemoveObjectArgs
 import io.minio.RemoveObjectsArgs
 import io.minio.StatObjectArgs
 import io.minio.StatObjectResponse
-import io.minio.messages.DeleteObject
+import io.minio.messages.DeleteRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
@@ -58,7 +58,7 @@ class MinioRepository(
 
     /**
      * [virtualHostedStyle] is a huge mess in the underlying SDK, see
-     * [io.minio.S3Base.buildUrl] and [io.minio.MinioAsyncClient.Builder.endpoint].
+     * [io.minio.BaseS3Client] and [io.minio.MinioAsyncClient.Builder.endpoint].
      *
      * Gist is (I think):
      *   * AWS and aliyuncs.com endpoints are automagically set to use virtualHostedStyle
@@ -95,7 +95,7 @@ class MinioRepository(
         /**
          * Creates a http client with optional [UploadProgressInterceptor].
          *
-         * Partly taken from [io.minio.http.HttpUtils.newDefaultHttpClient]
+         * Partly taken from [io.minio.Http.newDefaultClient]
          */
         fun client(uploadProgressTracker: ProgressTracker? = null): OkHttpClient {
             val timeout = TimeUnit.MINUTES.toMillis(5)
@@ -267,7 +267,7 @@ class MinioRepository(
 
     fun removeAll() {
 
-        val delObjs = listObjects().map { DeleteObject(it.name) }
+        val delObjs = listObjects().map { DeleteRequest.Object(it.name) }
 
         val params = RemoveObjectsArgs.builder()
             .bucket(bucket)

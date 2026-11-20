@@ -111,14 +111,14 @@ dependencies {
     val lifecycleVersion = "2.10.0"
 
     // minio / S3
-    implementation("io.minio:minio:8.6.0")
+    implementation("io.minio:minio:9.0.4")
 
     // needed for okhttp3/minio:
     // Match version from https://github.com/minio/minio-java/blob/master/build.gradle
     //noinspection GradleDependency
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.19.1")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.21.8")
     //noinspection GradleDependency
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.19.1")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.21.8")
     implementation("javax.xml.stream:stax-api:1.0-2")
 
     implementation("androidx.core:core-ktx:1.17.0")
@@ -154,7 +154,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.testcontainers:minio:1.21.4")
-    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
     testImplementation("io.mockk:mockk:1.14.9")
     testImplementation("androidx.test:core-ktx:1.7.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
