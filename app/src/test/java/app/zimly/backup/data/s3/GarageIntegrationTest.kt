@@ -1,6 +1,7 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.readTestResource
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.verify
@@ -72,12 +73,11 @@ class GarageIntegrationTest {
     @Test
     fun put() = runTest {
         val image = "/testdata/test_image.png"
-        val stream =
-            javaClass.getResourceAsStream(image) ?: throw Error("Could not open test resource.")
-        val size = stream.available().toLong()
+        val bytes = readTestResource(image)
+        val size = bytes.size.toLong()
 
         val lastProgress =
-            minioRepository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
+            minioRepository.put({ ByteArrayInputStream(bytes) }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .last()
 

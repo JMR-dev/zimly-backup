@@ -2,6 +2,7 @@ package app.zimly.backup.data.s3
 
 import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.LocalContentResolver
+import app.zimly.backup.readTestResource
 import app.zimly.backup.sync.UploadSyncService
 import io.mockk.every
 import io.mockk.mockk
@@ -15,6 +16,7 @@ import org.junit.After
 import org.junit.ClassRule
 import org.junit.Test
 import org.junit.rules.ExternalResource
+import java.io.ByteArrayInputStream
 import java.time.Instant
 import kotlin.time.TimeSource
 
@@ -26,15 +28,14 @@ class LinodeIntegrationTest {
 
         // GIVEN
         val image = "/testdata/test_image.png"
-        val stream =
-            javaClass.getResourceAsStream(image) ?: throw Error("Could not open test resource.")
-        val size = stream.available().toLong()
+        val bytes = readTestResource(image)
+        val size = bytes.size.toLong()
 
         val before = timeSource.markNow()
 
         // WHEN
         val res =
-            repository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
+            repository.put({ ByteArrayInputStream(bytes) }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .toList()
 

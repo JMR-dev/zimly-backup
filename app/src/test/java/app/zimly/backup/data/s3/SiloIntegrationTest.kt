@@ -1,6 +1,7 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.readTestResource
 import io.minio.MakeBucketArgs
 import io.minio.MinioClient
 import io.minio.SetObjectLockConfigurationArgs
@@ -50,7 +51,7 @@ class SiloIntegrationTest {
     @Test
     fun `small upload to a locked bucket is stored and locked`() = runTest {
         // test_image2.png is 0.6 MiB, below the 5 MiB part size, so this is one PutObject.
-        val image = javaClass.getResourceAsStream("/testdata/test_image2.png")!!.use { it.readBytes() }
+        val image = readTestResource("/testdata/test_image2.png")
         assertUploadedAndLocked("small.png", "image/png", image)
     }
 

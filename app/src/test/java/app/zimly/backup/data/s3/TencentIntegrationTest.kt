@@ -3,6 +3,7 @@ package app.zimly.backup.data.s3
 import android.util.Log
 import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.LocalContentResolver
+import app.zimly.backup.readTestResource
 import app.zimly.backup.sync.UploadSyncService
 import io.mockk.every
 import io.mockk.mockk
@@ -16,6 +17,7 @@ import org.hamcrest.MatcherAssert.assertThat
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.time.Instant
 import kotlin.time.TimeSource
 
@@ -58,15 +60,14 @@ class TencentIntegrationTest {
 
         // GIVEN
         val image = "/testdata/test_image.png"
-        val stream =
-            javaClass.getResourceAsStream(image) ?: throw Error("Could not open test resource.")
-        val size = stream.available().toLong()
+        val bytes = readTestResource(image)
+        val size = bytes.size.toLong()
 
         val before = timeSource.markNow()
 
         // WHEN
         val res =
-            s3Repository.put({ javaClass.getResourceAsStream(image)!! }, "testObj", "image/png", size)
+            s3Repository.put({ ByteArrayInputStream(bytes) }, "testObj", "image/png", size)
                 .onEach { println(it) }
                 .toList()
 

@@ -1,6 +1,7 @@
 package app.zimly.backup.data.s3
 
 import android.util.Log
+import app.zimly.backup.readTestResource
 import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.flow.last
@@ -44,12 +45,12 @@ class B2IntegrationTest {
 
     @Test
     fun `single part upload to a locked B2 bucket`() = runTest(timeout = 5.minutes) {
-        assertUploaded("$runPrefix/small.png", resource("/testdata/test_image2.png"))
+        assertUploaded("$runPrefix/small.png", readTestResource("/testdata/test_image2.png"))
     }
 
     @Test
     fun `multipart upload to a locked B2 bucket`() = runTest(timeout = 5.minutes) {
-        assertUploaded("$runPrefix/multipart.png", resource("/testdata/test_image.png"))
+        assertUploaded("$runPrefix/multipart.png", readTestResource("/testdata/test_image.png"))
     }
 
     private suspend fun assertUploaded(name: String, bytes: ByteArray) {
@@ -77,10 +78,6 @@ class B2IntegrationTest {
 
     private fun env(name: String): String =
         requireNotNull(System.getenv(name)) { "B2IntegrationTest needs the $name environment variable" }
-
-    private fun resource(path: String): ByteArray =
-        requireNotNull(javaClass.getResourceAsStream(path)) { "Missing test resource $path" }
-            .use { it.readBytes() }
 
     private companion object {
         const val CONTENT_TYPE = "image/png"
