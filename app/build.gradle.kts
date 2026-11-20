@@ -10,7 +10,7 @@ plugins {
 }
 
 extensions.configure<ApplicationExtension> {
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // This gets hot-patched for Google Play releases.
