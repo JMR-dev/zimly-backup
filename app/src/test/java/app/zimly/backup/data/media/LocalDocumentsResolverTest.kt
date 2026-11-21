@@ -11,6 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -194,6 +195,29 @@ class LocalDocumentsResolverTest {
         writeableResolver().delete("Missing/missing.txt")
 
         assertEquals(listOf(FOLDER1_ID), documentStore.list().map { it.id })
+    }
+
+    /**
+     * The fake provider can't open files, so every open fails here. A document this call created
+     * must not stay behind empty, with a timestamp that makes later syncs skip it.
+     */
+    @Test
+    fun aDocumentCreatedForAFailedOpenIsRemoved() {
+        documentStore.add(folder1())
+
+        assertFails { writeableResolver().createOutputStream("Folder1/new.txt", "text/plain") }
+
+        assertEquals(listOf(FOLDER1_ID), documentStore.list().map { it.id })
+    }
+
+    /** An existing document that failed to open was never written to, so it stays. */
+    @Test
+    fun anExistingDocumentThatFailsToOpenStays() {
+        documentStore.add(folder1(), FakeDocument(TEST1_ID, "test1.txt", "text/plain", parentId = FOLDER1_ID))
+
+        assertFails { writeableResolver().createOutputStream("Folder1/test1.txt", "text/plain") }
+
+        assertNotNull(documentStore[TEST1_ID])
     }
 
     // Needs FakeDocumentsRepository.

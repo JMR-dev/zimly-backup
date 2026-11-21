@@ -92,16 +92,19 @@ class DownloadSyncService(
             .onCompletion { failure -> if (failure != null && target.opened) deletePartial(target.path, failure) }
     }
 
-    /** The local file of one download: opens it on request, and remembers that it tried. */
+    /**
+     * The local file of one download: opens it on request, and remembers that it did. A file that
+     * fails to open was never written to; the resolver removes it if it had just created it.
+     */
     private inner class LocalTarget(val path: String, private val mimeType: String) {
         @Volatile
         var opened = false
             private set
 
-        // Marked before opening: creating the document can leave it behind even if opening fails.
         fun open(): OutputStream {
+            val stream = localContentResolver.createOutputStream(path, mimeType)
             opened = true
-            return localContentResolver.createOutputStream(path, mimeType)
+            return stream
         }
     }
 

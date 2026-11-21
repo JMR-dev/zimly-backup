@@ -109,11 +109,29 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
 
     /**
      * Creates a [OutputStream] for a given document identified by [objectPath]. Creates the document
-     * including parent directories if not existing.
+     * including parent directories if not existing. If opening fails, a document this call created
+     * is removed again, so no empty file with a fresh timestamp is left for later syncs to skip.
      */
     override fun createOutputStream(objectPath: String, mimeType: String): OutputStream {
-        val document = createOrFindDocument(objectPath, mimeType)
-        return getOutputStream(document)
+        val existing = findDocument(objectPath)
+        val document = existing ?: createOrFindDocument(objectPath, mimeType)
+        return try {
+            getOutputStream(document)
+        } catch (e: Exception) {
+            if (existing == null) removeAfterFailedOpen(document, e)
+            throw e
+        }
+    }
+
+    /** A failure to remove it is attached to [failure], which the caller still gets. */
+    private fun removeAfterFailedOpen(document: Uri, failure: Exception) {
+        try {
+            if (!documentsRepository.deleteDocument(document)) {
+                failure.addSuppressed(IOException("Failed to delete $document"))
+            }
+        } catch (e: Exception) {
+            failure.addSuppressed(e)
+        }
     }
 
     /**
@@ -178,13 +196,9 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
         return currentUri
     }
 
-    /**
-     * Opens [document] in mode "wt": write, truncating what was there. Plain "w" (the default)
-     * doesn't truncate with the external storage provider (seen on the Android 17 emulator), so a
-     * shorter new version would keep the old file's end.
-     */
+    /** Opens [document], replacing what it held (see [DocumentsContractRepository.openOutputStream]). */
     private fun getOutputStream(document: Uri): OutputStream {
-        return contentResolver.openOutputStream(document, "wt")
+        return documentsRepository.openOutputStream(document)
             ?: throw IOException("Failed to open stream for $document")
     }
 

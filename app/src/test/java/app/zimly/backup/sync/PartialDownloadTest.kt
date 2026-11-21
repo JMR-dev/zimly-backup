@@ -68,6 +68,17 @@ class PartialDownloadTest {
         verify(exactly = 0) { local.delete(any()) }
     }
 
+    /** A local file that failed to open was never written to, so it is not deleted. */
+    @Test
+    fun `a local file that fails to open is not deleted`() = runTest {
+        every { local.createOutputStream(PATH, CONTENT_TYPE) } throws IOException("read-only file")
+        coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
+
+        assertFailsWith<IOException> { sync() }
+
+        verify(exactly = 0) { local.delete(any()) }
+    }
+
     @Test
     fun `a completed download keeps its file`() = runTest {
         coEvery { s3.get(PATH, SIZE, any()) } answers { completedDownload(thirdArg()) }
