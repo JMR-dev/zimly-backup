@@ -19,6 +19,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -106,6 +107,34 @@ class DownloadTest {
         assertTrue("output closed", output.closed)
     }
 
+    /**
+     * The object grew between the sync reading its size and downloading it. The copy stops past
+     * the size it was given instead of reading on without a limit; the next sync reads the size
+     * again.
+     */
+    @Test
+    fun `a download that gets more bytes than announced ends with an IO error`() = runBlocking {
+        val bytes = Random(5).nextBytes(SIZE)
+        server.enqueue(objectResponse(bytes))
+        val output = TrackedOutput()
+
+        assertFailsWith<IOException> {
+            withTimeout(TIMEOUT) { repository().get(NAME, SIZE / 2L, output::open).toList() }
+        }
+        assertTrue("output closed", output.closed)
+    }
+
+    /** Opening the local file makes blocking storage-provider calls, which belong on an IO thread. */
+    @Test
+    fun `the output opens off the collector's thread`() = runBlocking {
+        server.enqueue(objectResponse(Random(6).nextBytes(SIZE)))
+        val output = TrackedOutput()
+
+        withTimeout(TIMEOUT) { repository().get(NAME, SIZE.toLong(), output::open).toList() }
+
+        assertNotSame(Thread.currentThread(), output.openedOn)
+    }
+
     /** minio wraps it in a CompletionException; the sync retries only an IOException. */
     @Test
     fun `a connection dropped before the response ends with an IO error`() = runBlocking {
@@ -177,8 +206,12 @@ class DownloadTest {
         @Volatile
         var closed = false
 
+        @Volatile
+        var openedOn: Thread? = null
+
         fun open(): OutputStream {
             opened = true
+            openedOn = Thread.currentThread()
             return this
         }
 

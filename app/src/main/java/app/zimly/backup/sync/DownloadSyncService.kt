@@ -7,7 +7,9 @@ import app.zimly.backup.data.s3.Progress
 import app.zimly.backup.data.s3.S3Object
 import app.zimly.backup.data.s3.S3Repository
 import io.minio.StatObjectResponse
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flow
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.withContext
 import java.io.OutputStream
 
 class DownloadSyncService(
@@ -84,27 +87,38 @@ class DownloadSyncService(
 
     /**
      * One file's download. Its local file opens only once the server answers with the object, and
-     * is deleted only if this download opened it and then failed or was cancelled.
+     * is deleted only if this download opened it and then failed or was cancelled before the whole
+     * file was written.
      */
     private suspend fun download(s3Obj: StatObjectResponse): Flow<Progress> {
-        val target = LocalTarget(s3Obj.`object`(), s3Obj.contentType())
+        val target = LocalTarget(s3Obj.`object`(), s3Obj.contentType(), s3Obj.size())
         return s3Repository.get(s3Obj.`object`(), s3Obj.size(), target::open)
-            .onCompletion { failure -> if (failure != null && target.opened) deletePartial(target.path, failure) }
+            .onCompletion { failure ->
+                // NonCancellable: a cancel is one of the failures, and must not skip the delete.
+                if (failure != null && target.isPartial()) {
+                    withContext(NonCancellable + Dispatchers.IO) { deletePartial(target.path, failure) }
+                }
+            }
     }
 
     /**
-     * The local file of one download: opens it on request, and remembers that it did. A file that
-     * fails to open was never written to; the resolver removes it if it had just created it.
+     * The local file of one download: opens it on request, and remembers what reached it. A file
+     * that fails to open was never written to; the resolver removes it if it had just created it.
      */
-    private inner class LocalTarget(val path: String, private val mimeType: String) {
+    private inner class LocalTarget(val path: String, private val mimeType: String, private val size: Long) {
         @Volatile
-        var opened = false
-            private set
+        private var stream: CountingOutputStream? = null
 
-        fun open(): OutputStream {
-            val stream = localContentResolver.createOutputStream(path, mimeType)
-            opened = true
-            return stream
+        fun open(): OutputStream =
+            CountingOutputStream(localContentResolver.createOutputStream(path, mimeType)).also { stream = it }
+
+        /**
+         * Opened, but not every byte reached the file and closed with it. A failure after that,
+         * such as a cancel while the last progress is on its way, leaves a complete file.
+         */
+        fun isPartial(): Boolean {
+            val opened = stream ?: return false
+            return !(opened.isClosed && opened.count == size)
         }
     }
 

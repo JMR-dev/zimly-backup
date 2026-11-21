@@ -5,13 +5,17 @@ import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import okhttp3.Dns
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
+import org.junit.Assert.assertSame
 import org.junit.Before
 import org.junit.Test
 import java.io.IOException
+import java.net.UnknownHostException
 import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.seconds
 
@@ -63,6 +67,23 @@ class StatTest {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
 
         assertFailsWith<IOException> { repository().listObjects() }
+    }
+
+    /**
+     * minio wraps the IOException's own cause when it has one. On Android a DNS failure's cause is
+     * a GaiException, a RuntimeException, and a socket error's an ErrnoException: neither is an
+     * IOException, and the sync retries only an IOException.
+     */
+    @Test
+    fun `a listing failure whose cause isn't an IO error still ends with an IO error`() {
+        val cause = RuntimeException("android_getaddrinfo failed: EAI_NODATA")
+        val failingDns = Dns { host -> throw UnknownHostException(host).apply { initCause(cause) } }
+        val client = OkHttpClient.Builder().dns(failingDns).build()
+        val repository = MinioRepository("http://s3.invalid:9000", "key", "secret", "bucket", "us-east-1", httpClient = client)
+
+        val failure = assertFailsWith<IOException> { repository.listObjects() }
+
+        assertSame(cause, failure.cause)
     }
 
     // An explicit region keeps the SDK from asking the stub for the bucket's location.

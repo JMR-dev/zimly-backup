@@ -195,12 +195,13 @@ class MinioRepository(
             }
 
             // The output opens only once the server answers with the object: opening it may erase
-            // the local file, which a refused request must leave alone. use { } closes the
+            // the local file, which a refused request must leave alone. Opening it makes blocking
+            // storage-provider calls, so it runs on an IO thread with the copy. use { } closes the
             // response and the output on success and on any failure, a cancel's included. A
             // failure ends the flow with that error, which also cancels the progress observer.
             getObject(name).use { response ->
-                openOutput().use { output ->
-                    withContext(Dispatchers.IO) { copyBody(response, output, progressTracker) }
+                withContext(Dispatchers.IO) {
+                    openOutput().use { output -> copyBody(response, output, size, progressTracker) }
                 }
             }
 
@@ -212,14 +213,22 @@ class MinioRepository(
 
     /**
      * Copies the response body to [output], counting each read. It checks for cancellation between
-     * reads, so a cancelled download stops within one read instead of reading on to the end.
+     * reads, so a cancelled download stops at its next read instead of reading on to the end; a
+     * read blocked on a stalled connection still waits for the HTTP client's read timeout.
+     *
+     * It fails with an IOException once more than [size] bytes arrive (the object grew after its
+     * size was read), so the loop ends after at most [size] + 1 bytes.
      */
-    private suspend fun copyBody(response: GetObjectResponse, output: OutputStream, tracker: ProgressTracker) {
+    private suspend fun copyBody(response: GetObjectResponse, output: OutputStream, size: Long, tracker: ProgressTracker) {
         val body = response.source().counted(tracker)
         output.sink().buffer().use { sink ->
-            while (true) { // Ends at the end of the body, or at a cancel.
+            var copied = 0L
+            while (true) { // Ends at the end of the body, past [size], or at a cancel.
                 currentCoroutineContext().ensureActive()
-                if (body.read(sink.buffer, COPY_CHUNK_BYTES) == -1L) break
+                val read = body.read(sink.buffer, COPY_CHUNK_BYTES)
+                if (read == -1L) break
+                copied += read
+                if (copied > size) throw IOException("${response.`object`()} is longer than its $size bytes: it changed during the download")
                 sink.emitCompleteSegments()
             }
             sink.flush()
@@ -367,7 +376,7 @@ interface S3Repository {
  * neither an IOException. A server's error comes as a MinioException instead. So every one of
  * these becomes an IOException, which the sync retries.
  */
-internal fun listingFailure(e: IllegalStateException): IOException {
+private fun listingFailure(e: IllegalStateException): IOException {
     val cause = e.cause ?: e
     return cause as? IOException ?: IOException("Listing the bucket failed: ${cause.message}", cause)
 }
