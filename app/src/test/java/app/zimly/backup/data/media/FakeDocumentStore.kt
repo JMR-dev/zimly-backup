@@ -12,5 +12,7 @@ class FakeDocumentStore {
 
     operator fun get(id: String): FakeDocument? = documentStore[id]
 
+    fun remove(id: String): FakeDocument? = documentStore.remove(id)
+
     fun list(): MutableCollection<FakeDocument> = documentStore.values
 }

@@ -19,9 +19,12 @@ import androidx.work.WorkQuery
 import app.zimly.backup.data.db.ZimlyDatabase
 import app.zimly.backup.data.db.remote.RemoteDao
 import app.zimly.backup.data.db.remote.SyncDirection
+import app.zimly.backup.data.db.retry.NextTry
+import app.zimly.backup.data.db.retry.SyncRetryDao
 import app.zimly.backup.data.media.ContentType
 import app.zimly.backup.permission.DocumentsPermissionService
 import app.zimly.backup.permission.MediaPermissionService
+import app.zimly.backup.sync.SyncCancellation
 import app.zimly.backup.sync.SyncOutputs
 import app.zimly.backup.sync.SyncService
 import app.zimly.backup.sync.SyncWorker
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
@@ -44,15 +48,18 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class SyncViewModel(
+class SyncViewModel internal constructor(
     private val dao: RemoteDao,
     private val remoteId: Int,
     private val workManager: WorkManager,
     private val contentResolver: ContentResolver,
-    private val mediaPermissionService: MediaPermissionService
+    private val mediaPermissionService: MediaPermissionService,
+    private val retryDao: SyncRetryDao,
+    private val cancellation: SyncCancellation,
 ) : ViewModel() {
 
     // Todo: https://luisramos.dev/testing-your-android-viewmodel
@@ -78,7 +85,9 @@ class SyncViewModel(
                     remoteId,
                     workManager,
                     application.contentResolver,
-                    mediaPermissionService
+                    mediaPermissionService,
+                    db.syncRetryDao(),
+                    SyncCancellation(application.applicationContext, workManager, db.syncRetryDao()),
                 )
             }
         }
@@ -109,7 +118,7 @@ class SyncViewModel(
 
     // This identifier is used to identify already running sync instances and prevent simultaneous
     // sync-executions.
-    private var uniqueWorkIdentifier = "sync_${remoteId}"
+    private val uniqueWorkIdentifier = SyncWorker.uniqueWorkName(remoteId)
 
     var syncConfigurationState: Flow<SyncConfigurationState> = snapshotFlow { remoteId }
         .map { dao.loadById(it) }
@@ -158,9 +167,10 @@ class SyncViewModel(
             initialValue = null,
         )
 
-    // Adds Status.CALCULATING which is a UI centric action.
+    // Adds Status.CALCULATING which is a UI centric action, and Status.RETRYING, which is an
+    // ENQUEUED sync with a recorded retry: both still show the Cancel button.
     private val _syncInProgress = progressState.map { status ->
-        status.status in IN_PROGRESS_STATES.map { mapState(it) } + Status.CALCULATING
+        status.status in IN_PROGRESS_STATES.map { mapState(it) } + Status.CALCULATING + Status.RETRYING
     }
     val syncInProgress = _syncInProgress.stateIn(viewModelScope, SharingStarted.Lazily, false)
 
@@ -243,10 +253,10 @@ class SyncViewModel(
      * Creates a [Flow] of [Progress] objects for observing the progress of a given [WorkInfo].
      */
     private fun observeSyncProgress(id: UUID): Flow<Progress> {
-        return workManager.getWorkInfoByIdFlow(id)
-            .filterNotNull()
-            // filter out unhandled states that result in a "nulled" out progress object.
-            .map { workInfo ->
+        val workInfos = workManager.getWorkInfoByIdFlow(id).filterNotNull()
+        // A sync waiting to retry is ENQUEUED like one waiting for its first run; its recorded
+        // retry, cleared when a run starts, tells them apart.
+        return combine(workInfos, retryDao.observe(remoteId)) { workInfo, retry ->
 
                 val progressState = Progress()
 
@@ -279,7 +289,9 @@ class SyncViewModel(
                     }
 
                     WorkInfo.State.ENQUEUED -> {
-                        progressState.status = mapState(workInfo.state)
+                        val nextTry = retry?.nextTry
+                        progressState.nextTry = nextTry
+                        progressState.status = if (nextTry != null) Status.RETRYING else mapState(workInfo.state)
                     }
 
                     WorkInfo.State.BLOCKED -> {
@@ -325,8 +337,9 @@ class SyncViewModel(
         return syncRequest.id
     }
 
+    /** Cancels the sync, running or waiting to retry, and forgets its failures. */
     fun cancelSync() {
-        workManager.cancelUniqueWork(uniqueWorkIdentifier)
+        viewModelScope.launch { cancellation.cancel(remoteId) }
     }
 
     suspend fun clearError() {
@@ -356,10 +369,12 @@ class SyncViewModel(
         var diffBytes: Long = -1,
         var status: Status? = null,
         var error: String? = null,
+        /** While [Status.RETRYING]: the error that ended the last run, and the earliest next try. */
+        var nextTry: NextTry? = null,
     )
 
     enum class Status {
-        CALCULATING, IN_PROGRESS, COMPLETED, CONSTRAINTS_NOT_MET, CANCELLED, WAITING, FAILED,
+        CALCULATING, IN_PROGRESS, COMPLETED, CONSTRAINTS_NOT_MET, CANCELLED, WAITING, FAILED, RETRYING,
     }
 
 }

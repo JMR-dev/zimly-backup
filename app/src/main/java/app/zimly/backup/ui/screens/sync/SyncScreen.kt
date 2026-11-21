@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,13 +73,17 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.MutableCreationExtras
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.zimly.backup.data.db.remote.SyncDirection
+import app.zimly.backup.data.db.retry.NextTry
 import app.zimly.backup.data.media.ContentType
 import app.zimly.backup.permission.missingNotificationPermission
+import app.zimly.backup.sync.hasNetwork
+import app.zimly.backup.sync.waitingText
 import app.zimly.backup.ui.screens.sync.battery.BatterySaverContainer
 import app.zimly.backup.ui.screens.sync.permission.DocumentsPermissionContainer
 import app.zimly.backup.ui.screens.sync.permission.MediaPermissionContainer
 import app.zimly.backup.ui.theme.containerBackground
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -505,6 +510,7 @@ private fun ProgressBar(progress: SyncViewModel.Progress) {
         ) {
 
             val text = when (progress.status) {
+                SyncViewModel.Status.RETRYING -> progress.nextTry?.let { retryText(it) }.orEmpty()
                 SyncViewModel.Status.CONSTRAINTS_NOT_MET -> "Waiting for network"
                 SyncViewModel.Status.WAITING -> "Waiting"
                 SyncViewModel.Status.CALCULATING -> "Calculating"
@@ -569,5 +575,32 @@ private fun ProgressBar(progress: SyncViewModel.Progress) {
                 }
             }
         }
+
+        // A retrying sync keeps its last error on screen until the next run starts.
+        progress.nextTry?.takeIf { progress.status == SyncViewModel.Status.RETRYING }?.let {
+            Text(
+                text = it.lastError,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = TextUnit(12F, TextUnitType.Sp),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
+}
+
+/**
+ * When a retrying sync tries again, or what it waits for once that time has passed. It updates
+ * itself once, at that time: the text can't change before then.
+ */
+@Composable
+private fun retryText(nextTry: NextTry): String {
+    val context = LocalContext.current
+    val now by produceState(System.currentTimeMillis(), nextTry.at) {
+        val wait = nextTry.at - System.currentTimeMillis()
+        if (wait > 0) {
+            delay(wait)
+            value = System.currentTimeMillis()
+        }
+    }
+    return waitingText(context, nextTry.at, now, hasNetwork(context))
 }

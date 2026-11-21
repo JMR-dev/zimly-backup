@@ -2,6 +2,7 @@ package app.zimly.backup.sync
 
 import android.content.Context
 import androidx.core.net.toUri
+import app.zimly.backup.data.db.ZimlyDatabase
 import app.zimly.backup.data.db.remote.Remote
 import app.zimly.backup.data.db.remote.SyncDirection
 import app.zimly.backup.data.media.ContentType
@@ -36,12 +37,20 @@ interface SyncService {
                         SyncDirection.DOWNLOAD -> DownloadSyncService(
                             s3Repository,
                             contentResolver,
+                            downloadsInProgress(context, remote),
                         )
                     }
                 }
             }
         }
     }
+}
+
+/** The record of [remote]'s unsettled downloads, in the app's database. */
+private fun downloadsInProgress(context: Context, remote: Remote): DownloadsInProgress {
+    val remoteId = checkNotNull(remote.uid) { "A saved remote has an id" }
+    val dao = ZimlyDatabase.getInstance(context.applicationContext).downloadInProgressDao()
+    return StoredDownloadsInProgress(dao, remoteId)
 }
 
 abstract class Diff {

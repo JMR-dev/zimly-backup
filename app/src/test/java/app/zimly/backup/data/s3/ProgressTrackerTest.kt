@@ -1,14 +1,17 @@
 package app.zimly.backup.data.s3
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import org.hamcrest.CoreMatchers.`is`
 import org.hamcrest.MatcherAssert
 import org.junit.Test
+import kotlin.time.Duration.Companion.seconds
 
 class ProgressTrackerTest {
 
@@ -58,4 +61,70 @@ class ProgressTrackerTest {
         MatcherAssert.assertThat(res.last().percentage, `is`(1F))
     }
 
+    /** A download of an empty object reads no bytes, so it never steps the tracker. */
+    @Test
+    fun emptySizeIsCompleteWithoutAStep() = runTest {
+        val progress = withTimeout(5.seconds) { ProgressTracker(0L).observe().toList() }
+
+        MatcherAssert.assertThat(progress.last().percentage, `is`(1F))
+    }
+
+    /**
+     * A transfer can end short of the size it was given: the object shrank after its size was
+     * read, or steps were dropped while the observer lagged. finish() still ends observing.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun finishEndsObservingShortOfTheSize() = runTest {
+        val tracker = ProgressTracker(1000L)
+        val progress = async(UnconfinedTestDispatcher(testScheduler)) { tracker.observe().toList() }
+
+        tracker.stepBy(100L)
+        tracker.finish()
+
+        val observed = withTimeout(5.seconds) { progress.await() }
+        MatcherAssert.assertThat(observed.last().totalReadBytes, `is`(100L))
+    }
+
+    /**
+     * Steps beyond the buffer are dropped while the observer lags, but their bytes still count:
+     * the sync adds up each progress's bytes, and would otherwise report success short of 100%.
+     */
+    @Test
+    fun droppedStepsStillCountTheirBytes() = runTest {
+        val steps = BUFFERED_STEPS + 100
+        val tracker = ProgressTracker(steps * STEP_BYTES)
+        val progress = async { tracker.observe().toList() }
+        testScheduler.runCurrent() // The observer subscribes, then lags behind every step below.
+
+        repeat(steps.toInt()) { tracker.stepBy(STEP_BYTES) }
+        tracker.finish()
+
+        val observed = withTimeout(5.seconds) { progress.await() }
+        MatcherAssert.assertThat(observed.sumOf { it.readBytes }, `is`(steps * STEP_BYTES))
+        MatcherAssert.assertThat(observed.last().percentage, `is`(1F))
+    }
+
+    /**
+     * Past 2^24 bytes a Float can't tell the last few bytes apart: (size - 1) / size rounds to
+     * 1.0f for a 64 MiB object. Observing must still go on until every byte is counted.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun observingEndsWithTheLastByteOfALargeObject() = runTest {
+        val size = 64L * 1024 * 1024
+        val tracker = ProgressTracker(size)
+        val progress = async(UnconfinedTestDispatcher(testScheduler)) { tracker.observe().toList() }
+
+        tracker.stepBy(size - 1)
+        tracker.stepBy(1)
+
+        val observed = withTimeout(5.seconds) { progress.await() }
+        MatcherAssert.assertThat(observed.last().totalReadBytes, `is`(size))
+    }
+
+    private companion object {
+        const val BUFFERED_STEPS = 500L
+        const val STEP_BYTES = 10L
+    }
 }

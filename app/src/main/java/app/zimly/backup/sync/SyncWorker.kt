@@ -13,17 +13,16 @@ import androidx.work.Data
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.zimly.backup.data.db.ZimlyDatabase
+import app.zimly.backup.data.db.retry.NextTry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
-import java.io.IOException
-import java.time.Duration
+import kotlin.time.Duration
 
 class SyncWorker(
     private val context: Context,
@@ -42,13 +41,19 @@ class SyncWorker(
             )
         }
 
+        val retries = SyncRetries(ZimlyDatabase.getInstance(applicationContext).syncRetryDao(), remoteId)
+        retries.runStarted()
+        RetryNotification.dismiss(applicationContext, remoteId)
+
         Log.i(TAG, "Launching sync...")
 
         val foreground = ForegroundProgress()
         foreground.start()
+        var finishedAFile = false
 
-        return syncService.synchronize()
+        val result = syncService.synchronize()
             .onEach {
+                if (it.transferredFiles > 0) finishedAFile = true
                 foreground.update(it.percentage)
                 setProgressAsync(
                     Data.Builder()
@@ -76,9 +81,43 @@ class SyncWorker(
             .catch {
                 Log.e(TAG, "Failed to sync diff.", it)
 
-                emit(onError(it))
+                emit(onError(it, retries, finishedAFile))
             }
             .last()
+        // A sync that succeeded or failed for good is over; one waiting to retry isn't.
+        if (!result.isRetry()) retries.ended()
+        return result
+    }
+
+    private val remoteId: Int
+        get() = remoteIdOf(inputData)
+
+    /**
+     * Fails or retries depending on the error and on how long the sync has been failing, and
+     * says so in a notification: until the next run, nothing else shows it. A run that
+     * [finishedAFile] made progress, so the failing time starts again.
+     */
+    private suspend fun onError(error: Throwable, retries: SyncRetries, finishedAFile: Boolean): Result {
+        if (finishedAFile) retries.progressMade()
+        val failingFor = retries.failingFor()
+        val result = syncResultOf(error, failingFor)
+        if (result.isRetry()) notifyRetrying(error, retries, firstFailure = failingFor == Duration.ZERO) else notifyFailed(result)
+        return result
+    }
+
+    /** Records the retry and posts its notification, which alerts only for a streak's [firstFailure]. */
+    private suspend fun notifyRetrying(error: Throwable, retries: SyncRetries, firstFailure: Boolean) {
+        val message = error.message ?: error.javaClass.simpleName
+        val nextTry = NextTry(message, nextTryAt(System.currentTimeMillis(), runAttemptCount))
+        retries.retrying(nextTry.lastError, nextTry.at)
+        val cancel = SyncCancellation.pendingIntent(applicationContext, remoteId)
+        val notification = RetryNotification.retrying(applicationContext, nextTry, cancel, alert = firstFailure)
+        RetryNotification.post(applicationContext, remoteId, notification)
+    }
+
+    private fun notifyFailed(result: Result) {
+        val error = result.outputData.getString(SyncOutputs.ERROR) ?: UNKNOWN_ERROR
+        RetryNotification.post(applicationContext, remoteId, RetryNotification.failed(applicationContext, error))
     }
 
     /**
@@ -94,9 +133,8 @@ class SyncWorker(
      */
     private inner class ForegroundProgress {
         private val steps = PercentSteps()
-        private val cancel by lazy {
-            WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
-        }
+        // The same Cancel as the retry notification's, which also forgets the sync's failures.
+        private val cancel by lazy { SyncCancellation.pendingIntent(applicationContext, remoteId) }
         private var inForeground = false
 
         suspend fun start() {
@@ -114,9 +152,7 @@ class SyncWorker(
         }
 
         private suspend fun show(percent: Int?) {
-            val info = SyncNotification.foregroundInfo(
-                applicationContext, remoteIdOf(inputData), percent, cancel
-            )
+            val info = SyncNotification.foregroundInfo(applicationContext, remoteId, percent, cancel)
             inForeground = try {
                 setForeground(info)
                 true
@@ -133,23 +169,12 @@ class SyncWorker(
         }
     }
 
-    /**
-     * Fail or retry depending on the thrown error.
-     */
-    private fun onError(it: Throwable): Result {
-        val result = when (it) {
-            is IOException -> Result.retry() // Network errors → retry
-            else -> Result.failure(
-                Data.Builder()
-                    .putString(SyncOutputs.ERROR, it.message)
-                    .build()
-            )
-        }
-        return result
-    }
-
     companion object {
         val TAG: String? = SyncWorker::class.simpleName
+        private const val UNKNOWN_ERROR = "Unknown error"
+
+        /** The unique work name of [remoteId]'s sync, which keeps each remote to one sync at a time. */
+        fun uniqueWorkName(remoteId: Int): String = "sync_$remoteId"
 
         /**
          * The work request that syncs [remoteId]: it waits for a network connection and retries
@@ -157,7 +182,7 @@ class SyncWorker(
          */
         fun request(remoteId: Int): OneTimeWorkRequest =
             OneTimeWorkRequestBuilder<SyncWorker>()
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofMinutes(1))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, SYNC_BACKOFF)
                 .setInputData(workDataOf(SyncInputs.REMOTE_CONFIGURATION_ID to remoteId))
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
