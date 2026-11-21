@@ -86,4 +86,27 @@ class ProgressTrackerTest {
         MatcherAssert.assertThat(observed.last().totalReadBytes, `is`(100L))
     }
 
+    /**
+     * Steps beyond the buffer are dropped while the observer lags, but their bytes still count:
+     * the sync adds up each progress's bytes, and would otherwise report success short of 100%.
+     */
+    @Test
+    fun droppedStepsStillCountTheirBytes() = runTest {
+        val steps = BUFFERED_STEPS + 100
+        val tracker = ProgressTracker(steps * STEP_BYTES)
+        val progress = async { tracker.observe().toList() }
+        testScheduler.runCurrent() // The observer subscribes, then lags behind every step below.
+
+        repeat(steps.toInt()) { tracker.stepBy(STEP_BYTES) }
+        tracker.finish()
+
+        val observed = withTimeout(5.seconds) { progress.await() }
+        MatcherAssert.assertThat(observed.sumOf { it.readBytes }, `is`(steps * STEP_BYTES))
+        MatcherAssert.assertThat(observed.last().percentage, `is`(1F))
+    }
+
+    private companion object {
+        const val BUFFERED_STEPS = 500L
+        const val STEP_BYTES = 10L
+    }
 }
