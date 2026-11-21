@@ -65,10 +65,14 @@ extensions.configure<ApplicationExtension> {
         }
     }
 
-    // Test doubles used by both JVM unit tests and on-device instrumented tests.
+    // Test doubles used by both JVM unit tests and on-device instrumented tests. The exported Room
+    // schemas are the instrumented tests' assets, which MigrationTestHelper reads.
     sourceSets {
         getByName("test") { kotlin.directories.add("src/sharedTest/java") }
-        getByName("androidTest") { kotlin.directories.add("src/sharedTest/java") }
+        getByName("androidTest") {
+            kotlin.directories.add("src/sharedTest/java")
+            assets.directories.add("$projectDir/schemas")
+        }
     }
 
     dependenciesInfo {
@@ -152,6 +156,14 @@ dependencies {
     // room DB
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
+    constraints {
+        // room-testing reads the exported schemas with kotlinx-serialization 1.8.1, and AGP pins
+        // instrumented tests to the app's versions; androidx.savedstate alone brings 1.7.3, so
+        // the migration test crashed with an AbstractMethodError. 1.8.1 is a compatible 1.x update.
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1") {
+            because("room-testing 2.8.4 needs it for ZimlyDatabaseMigrationTest")
+        }
+    }
 
     // To use Kotlin annotation processing tool (ksp)
     ksp("androidx.room:room-compiler:$roomVersion")
@@ -172,6 +184,8 @@ dependencies {
     // https://developer.android.com/jetpack/androidx/releases/test
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.work:work-testing:$workManagerVersion")
+    // Migrates real old databases from the exported schemas (ZimlyDatabaseMigrationTest)
+    androidTestImplementation("androidx.room:room-testing:$roomVersion")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("io.mockk:mockk-android:1.14.9")
     // On-device S3 uploads against ObjectLockS3Stub over HTTPS
