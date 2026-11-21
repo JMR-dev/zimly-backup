@@ -3,6 +3,8 @@ package app.zimly.backup.data.media
 import android.net.Uri
 import android.provider.DocumentsContract
 import app.zimly.backup.data.media.FakeDocumentsProvider.FakeDocument
+import java.io.FileNotFoundException
+import java.io.OutputStream
 
 class FakeDocumentsRepository(
     private val authority: String,
@@ -35,4 +37,12 @@ class FakeDocumentsRepository(
 
         return newDocUri
     }
+
+    /** Stub implementation to make [DocumentsContract.deleteDocument] work. */
+    override fun deleteDocument(documentUri: Uri): Boolean =
+        documentStore.remove(DocumentsContract.getDocumentId(documentUri)) != null
+
+    /** The fake stores no file contents, so every open fails, as a provider's can. */
+    override fun openOutputStream(documentUri: Uri): OutputStream? =
+        throw FileNotFoundException("The fake stores no file contents: $documentUri")
 }

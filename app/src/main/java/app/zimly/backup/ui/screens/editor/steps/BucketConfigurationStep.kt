@@ -50,6 +50,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.zimly.backup.data.s3.MinioRepository
+import app.zimly.backup.data.s3.s3ErrorMessage
 import app.zimly.backup.ui.components.Notification
 import app.zimly.backup.ui.components.NotificationProvider
 import app.zimly.backup.ui.screens.editor.form.BucketForm
@@ -58,7 +59,6 @@ import app.zimly.backup.ui.screens.editor.form.field.FieldState
 import app.zimly.backup.ui.screens.editor.steps.components.WizardStep
 import app.zimly.backup.ui.theme.ZimzyncTheme
 import app.zimly.backup.ui.theme.containerBackground
-import io.minio.errors.ErrorResponseException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -103,18 +103,11 @@ class BucketViewModel(
                 if (bucketExists) "Connection successful, bucket exists!" else "Bucket does not exist!"
             notification.update { Notification(message = message, type = Notification.Type.INFO) }
         } catch (e: Exception) {
-            val cause = e.cause ?: e
-            var message = cause.message
-            if (cause is ErrorResponseException) {
-                cause.errorResponse().message()
-                val status = cause.response().code
-                val mes = cause.errorResponse().message()
-                val errorCode = cause.errorResponse().code()
-                message = "status: $status, message: $mes, errorCode: $errorCode"
-            }
+            // bucketExists() hands over the error itself, already unwrapped from minio's
+            // CompletionException: its cause would drop context, such as the host name.
             notification.update {
                 Notification(
-                    message = "Connection failed: $message",
+                    message = "Connection failed: ${s3ErrorMessage(e)}",
                     type = Notification.Type.ERROR
                 )
             }

@@ -30,6 +30,12 @@ interface LocalContentResolver {
 
 interface WriteableContentResolver : LocalContentResolver {
     fun createOutputStream(objectPath: String, mimeType: String): OutputStream
+
+    /**
+     * Deletes the document at [objectPath], such as one whose download failed partway. Does
+     * nothing when there is no such document.
+     */
+    fun delete(objectPath: String)
 }
 
 
