@@ -44,6 +44,7 @@ class SyncWorkerForegroundTest {
         )
         mockkObject(SyncWorker)
         coEvery { SyncWorker.initSyncService(any(), any()) } returns syncService
+        every { SyncWorker.mayStartForegroundService() } returns true
     }
 
     @After
@@ -78,6 +79,24 @@ class SyncWorkerForegroundTest {
 
         assertTrue(result is Success)
         assertEquals("no retries after a refusal", 1, attempts.size)
+    }
+
+    /**
+     * A refused start still leaves the work in WorkManager's foreground bookkeeping, where it
+     * ignores Android's stop requests, so the worker doesn't ask when Android won't allow it.
+     */
+    @Test
+    fun syncDoesNotAskForTheForegroundFromTheBackground() {
+        every { SyncWorker.mayStartForegroundService() } returns false
+        val attempts = CopyOnWriteArrayList<ForegroundInfo>()
+
+        val result = runSync { _, _, info ->
+            attempts += info
+            Futures.immediateVoidFuture()
+        }
+
+        assertTrue(result is Success)
+        assertTrue("no foreground requests", attempts.isEmpty())
     }
 
     private fun runSync(foreground: ForegroundUpdater) = runBlocking {

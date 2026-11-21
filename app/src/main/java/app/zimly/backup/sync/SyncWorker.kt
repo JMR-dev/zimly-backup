@@ -1,6 +1,9 @@
 package app.zimly.backup.sync
 
+import android.app.ActivityManager
+import android.app.ActivityManager.RunningAppProcessInfo
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -78,10 +81,13 @@ class SyncWorker(
     }
 
     /**
-     * Runs this sync as a foreground job, which lifts Android's 10-minute limit on background work,
-     * and keeps its notification's progress current. Android 12+ refuses a foreground start while
-     * the app is in the background (a retry, for example): the sync then runs on as an ordinary
-     * job, under that limit, and this stops asking.
+     * Runs this sync as a foreground job, which lifts Android's runtime limit on background jobs
+     * (10 to 30 minutes), and keeps its notification's progress current.
+     *
+     * It asks only when [mayStartForegroundService]: WorkManager moves the work into its foreground
+     * bookkeeping before Android refuses a start, and doesn't undo that, so the work would then
+     * ignore Android's stop requests. From the background (a retry, for example) the sync runs as
+     * an ordinary job, under the limit. A refusal that still happens, in a race, stops the asking.
      */
     private inner class ForegroundProgress {
         private val steps = PercentSteps()
@@ -90,7 +96,14 @@ class SyncWorker(
         }
         private var allowed = true
 
-        suspend fun start() = show(percent = null)
+        suspend fun start() {
+            allowed = mayStartForegroundService()
+            if (allowed) {
+                show(percent = null)
+            } else {
+                Log.i(TAG, "The app is in the background: the sync runs as an ordinary job")
+            }
+        }
 
         suspend fun update(percentage: Float) {
             if (!allowed) return
@@ -143,6 +156,20 @@ class SyncWorker(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
                 )
                 .build()
+
+        /** Whether this process may start a foreground service now (see [mayStartForegroundService]). */
+        fun mayStartForegroundService(): Boolean =
+            mayStartForegroundService(Build.VERSION.SDK_INT, currentImportance())
+
+        /**
+         * Android 12+ allows a foreground service start only while the app is in the foreground
+         * (the user just tapped Sync). Earlier versions always allow it.
+         */
+        internal fun mayStartForegroundService(sdkInt: Int, importance: Int): Boolean =
+            sdkInt < Build.VERSION_CODES.S || importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+
+        private fun currentImportance(): Int =
+            RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
 
         /** The remote to sync, or -1 when the input names none. */
         private fun remoteIdOf(inputData: Data): Int =
