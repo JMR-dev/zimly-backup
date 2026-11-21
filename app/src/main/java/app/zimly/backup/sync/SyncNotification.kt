@@ -42,7 +42,7 @@ internal object SyncNotification {
     }
 
     /** Creating a channel that already exists does nothing, so this is safe on every update. */
-    private fun createChannel(context: Context) {
+    fun createChannel(context: Context) {
         val channel = NotificationChannelCompat
             .Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
             .setName(CHANNEL_NAME)

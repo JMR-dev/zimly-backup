@@ -11,10 +11,12 @@ import app.zimly.backup.data.db.notification.Notification
 import app.zimly.backup.data.db.notification.NotificationDao
 import app.zimly.backup.data.db.remote.Remote
 import app.zimly.backup.data.db.remote.RemoteDao
+import app.zimly.backup.data.db.retry.SyncRetry
+import app.zimly.backup.data.db.retry.SyncRetryDao
 
 @Database(
-    entities = [Remote::class, Notification::class],
-    version = 7,
+    entities = [Remote::class, Notification::class, SyncRetry::class],
+    version = 8,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3, spec = ZimlyDatabase.V3Migration::class),
@@ -22,11 +24,13 @@ import app.zimly.backup.data.db.remote.RemoteDao
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6, spec = ZimlyDatabase.V6Migration::class),
         AutoMigration(from = 6, to = 7),
+        AutoMigration(from = 7, to = 8),
     ]
 )
 abstract class ZimlyDatabase : RoomDatabase() {
     abstract fun remoteDao(): RemoteDao
     abstract fun notificationDao(): NotificationDao
+    abstract fun syncRetryDao(): SyncRetryDao
 
     @RenameColumn(tableName = "Remote", fromColumnName = "folder", toColumnName = "source_uri")
     class V3Migration : AutoMigrationSpec

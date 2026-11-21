@@ -18,12 +18,16 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.IOException
 import java.security.cert.CertificateException
 import javax.net.ssl.SSLException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -51,12 +55,24 @@ class SyncResultTest {
 
     @Test
     fun `a network error is retried`() {
-        assertTrue(syncResultOf(IOException("connection reset")) is Result.Retry)
+        assertTrue(syncResultOf(IOException("connection reset"), Duration.ZERO) is Result.Retry)
     }
 
     @Test
-    fun `any other error fails`() {
-        assertTrue(syncResultOf(Exception("bucket missing")) is Result.Failure)
+    fun `a network error just short of 24 hours of failing is retried`() {
+        assertTrue(syncResultOf(IOException("connection reset"), 24.hours - 1.minutes) is Result.Retry)
+    }
+
+    @Test
+    fun `a network error after 24 hours of failing gives up and says so`() {
+        val result = syncResultOf(IOException("connection reset"), 24.hours)
+
+        assertEquals("Gave up after 24 hours of failed tries: connection reset", errorOf(result))
+    }
+
+    @Test
+    fun `any other error fails with its message`() {
+        assertEquals("bucket missing", errorOf(syncResultOf(Exception("bucket missing"), Duration.ZERO)))
     }
 
     @Test
@@ -65,7 +81,7 @@ class SyncResultTest {
 
         val error = syncError(MinioRepository.client())
 
-        assertTrue("$error", syncResultOf(error) is Result.Failure)
+        assertTrue("$error", syncResultOf(error, Duration.ZERO) is Result.Failure)
     }
 
     @Test
@@ -75,8 +91,11 @@ class SyncResultTest {
 
         val error = syncError(clientTrusting(otherHost))
 
-        assertTrue("$error", syncResultOf(error) is Result.Failure)
+        assertTrue("$error", syncResultOf(error, Duration.ZERO) is Result.Failure)
     }
+
+    private fun errorOf(result: Result): String? =
+        (result as Result.Failure).outputData.getString(SyncOutputs.ERROR)
 
     private fun serveHttps(certificate: HeldCertificate) {
         val serverCertificates = HandshakeCertificates.Builder().heldCertificate(certificate).build()
