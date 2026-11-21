@@ -109,7 +109,7 @@ class ObjectLockSyncE2ETest {
     }
 
     @After
-    fun tearDown() = runBlocking {
+    fun tearDown() = runBlocking<Unit> {
         try {
             // A failed run can leave its sync uploading: cancel it first. WorkManager records the
             // cancel at once; the worker itself may take a moment longer to stop.
@@ -121,7 +121,7 @@ class ObjectLockSyncE2ETest {
     }
 
     @Test
-    fun syncWorkerUploadsPhotoAndVideoToLockedBucket() = runBlocking {
+    fun syncWorkerUploadsPhotoAndVideoToLockedBucket() = runBlocking<Unit> {
         val photo = seedMedia(IMAGES, PHOTO_NAME, "image/png") { output ->
             noisePng().also { output.write(it) }.let(::digestOf)
         }
