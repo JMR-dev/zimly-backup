@@ -1,6 +1,10 @@
 package app.zimly.backup.sync
 
+import android.app.ActivityManager
+import android.app.ActivityManager.RunningAppProcessInfo
 import android.content.Context
+import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -9,9 +13,11 @@ import androidx.work.Data
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.zimly.backup.data.db.ZimlyDatabase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.map
@@ -38,8 +44,12 @@ class SyncWorker(
 
         Log.i(TAG, "Launching sync...")
 
+        val foreground = ForegroundProgress()
+        foreground.start()
+
         return syncService.synchronize()
             .onEach {
+                foreground.update(it.percentage)
                 setProgressAsync(
                     Data.Builder()
                         .putInt(SyncOutputs.PROGRESS_COUNT, it.transferredFiles)
@@ -69,6 +79,58 @@ class SyncWorker(
                 emit(onError(it))
             }
             .last()
+    }
+
+    /**
+     * Runs this sync as a foreground job, which lifts Android's runtime limit on background jobs
+     * (10 to 30 minutes), and keeps its notification's progress current.
+     *
+     * It asks only when [mayStartForegroundService]: WorkManager moves the work into its foreground
+     * bookkeeping before Android refuses a start, and doesn't undo that, so the work would then
+     * ignore Android's stop requests. A sync that starts in the background (a retry, for example)
+     * runs as an ordinary job, and moves to the foreground at the next progress step after the
+     * user opens the app. Until then, a file that needs longer than the limit restarts on every
+     * run; resuming uploads across runs is what fixes that.
+     */
+    private inner class ForegroundProgress {
+        private val steps = PercentSteps()
+        private val cancel by lazy {
+            WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
+        }
+        private var inForeground = false
+
+        suspend fun start() {
+            if (mayStartForegroundService(applicationContext)) {
+                show(percent = null)
+            } else {
+                Log.i(TAG, "The app is in the background: the sync runs as an ordinary job for now")
+            }
+        }
+
+        /** Updates the notification once per whole percent, moving to the foreground if it now can. */
+        suspend fun update(percentage: Float) {
+            val percent = steps.next(percentage) ?: return
+            if (inForeground || mayStartForegroundService(applicationContext)) show(percent)
+        }
+
+        private suspend fun show(percent: Int?) {
+            val info = SyncNotification.foregroundInfo(
+                applicationContext, remoteIdOf(inputData), percent, cancel
+            )
+            inForeground = try {
+                setForeground(info)
+                true
+            } catch (e: CancellationException) {
+                throw e // A CancellationException is an IllegalStateException: don't treat it as a refusal.
+            } catch (e: IllegalStateException) {
+                // A race between the check and the start (the app left the screen in between).
+                // WorkManager still counts the work as foreground (see above), so Android's stops
+                // are ignored until the sync ends. A later request, once the app is back, restores
+                // the notification and the foreground service.
+                Log.w(TAG, "Android refused the foreground start; asking again at the next progress step", e)
+                false
+            }
+        }
     }
 
     /**
@@ -102,13 +164,37 @@ class SyncWorker(
                 )
                 .build()
 
+        /** Whether this process may start a foreground service now (see [mayStartForegroundService]). */
+        internal fun mayStartForegroundService(context: Context): Boolean =
+            mayStartForegroundService(Build.VERSION.SDK_INT, currentImportance(), ignoresBatteryOptimizations(context))
+
+        /**
+         * Android 12+ allows a foreground service start from an app in the foreground (the user just
+         * tapped Sync), or from one the user took off battery optimization, which the sync screen
+         * suggests. Earlier versions always allow it.
+         */
+        internal fun mayStartForegroundService(sdkInt: Int, importance: Int, ignoresBatteryOptimizations: Boolean): Boolean =
+            sdkInt < Build.VERSION_CODES.S ||
+                importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                ignoresBatteryOptimizations
+
+        private fun currentImportance(): Int =
+            RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
+
+        private fun ignoresBatteryOptimizations(context: Context): Boolean =
+            context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
+
+        /** The remote to sync, or -1 when the input names none. */
+        private fun remoteIdOf(inputData: Data): Int =
+            inputData.getInt(SyncInputs.REMOTE_CONFIGURATION_ID, -1)
+
         // TODO: provider passed through constructor?
         suspend fun initSyncService(context: Context, inputData: Data): SyncService {
 
             val db = ZimlyDatabase.getInstance(context.applicationContext)
             val dao = db.remoteDao()
 
-            val remoteId = inputData.getInt(SyncInputs.REMOTE_CONFIGURATION_ID, -1)
+            val remoteId = remoteIdOf(inputData)
             if (remoteId == -1) {
                 throw IllegalArgumentException("Remote configuration cannot be loaded, no ID passed.")
             }

@@ -2,6 +2,8 @@ package app.zimly.backup.ui.screens.sync
 
 import android.app.Application
 import android.text.format.Formatter
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -71,6 +73,7 @@ import androidx.lifecycle.viewmodel.MutableCreationExtras
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.zimly.backup.data.db.remote.SyncDirection
 import app.zimly.backup.data.media.ContentType
+import app.zimly.backup.permission.missingNotificationPermission
 import app.zimly.backup.ui.screens.sync.battery.BatterySaverContainer
 import app.zimly.backup.ui.screens.sync.permission.DocumentsPermissionContainer
 import app.zimly.backup.ui.screens.sync.permission.MediaPermissionContainer
@@ -111,6 +114,17 @@ fun SyncScreen(
             }
         }
 
+    val startSync: () -> Unit = {
+        viewModel.viewModelScope.launch {
+            viewModel.sync()
+        }
+    }
+
+    // Android 13+ asks for the notification permission first, so the sync's progress notification
+    // shows. The sync starts whatever the answer.
+    val notificationPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { startSync() }
+
     syncConfigurationState?.let { syncConfiguration ->
         SyncLayout(
             syncConfiguration,
@@ -119,9 +133,8 @@ fun SyncScreen(
             syncInProgress,
             snackbarState,
             sync = {
-                viewModel.viewModelScope.launch {
-                    viewModel.sync()
-                }
+                val missing = missingNotificationPermission(context)
+                if (missing != null) notificationPermission.launch(missing) else startSync()
             },
             cancelSync = { viewModel.cancelSync() },
             edit = { edit(syncConfiguration.direction, remoteId) },
