@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
-import java.io.IOException
 import java.time.Duration
 
 class SyncWorker(
@@ -72,19 +71,9 @@ class SyncWorker(
     }
 
     /**
-     * Fail or retry depending on the thrown error.
+     * Fail or retry depending on the thrown error and on how many runs it has had.
      */
-    private fun onError(it: Throwable): Result {
-        val result = when (it) {
-            is IOException -> Result.retry() // Network errors → retry
-            else -> Result.failure(
-                Data.Builder()
-                    .putString(SyncOutputs.ERROR, it.message)
-                    .build()
-            )
-        }
-        return result
-    }
+    private fun onError(it: Throwable): Result = syncResultOf(it, runAttemptCount)
 
     companion object {
         val TAG: String? = SyncWorker::class.simpleName
