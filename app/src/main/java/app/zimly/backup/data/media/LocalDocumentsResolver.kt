@@ -122,10 +122,7 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
      */
     internal fun createOrFindDocument(objectPath: String, mimeType: String): Uri {
         val (directories, objectName) = extractPath(objectPath)
-        val rootDocUri = DocumentsContract.buildDocumentUriUsingTree(
-            root,
-            DocumentsContract.getTreeDocumentId(root)
-        )
+        val rootDocUri = rootDocumentUri()
 
         val parentUri = if (directories.isNotEmpty()) {
             createOrFindDirectory(rootDocUri, directories)
@@ -140,6 +137,26 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
             objectName
         ) ?: throw IOException("Failed to create file in $parentUri")
     }
+
+    /** Leaves the document's folders in place, even when they end up empty. */
+    override fun delete(objectPath: String) {
+        val document = findDocument(objectPath) ?: return
+        if (!documentsRepository.deleteDocument(document)) {
+            throw IOException("Failed to delete $document")
+        }
+    }
+
+    /** The document at [objectPath], or null when it or one of its folders is missing. Creates nothing. */
+    private fun findDocument(objectPath: String): Uri? {
+        val (directories, objectName) = extractPath(objectPath)
+        var parentUri = rootDocumentUri()
+        for (directory in directories) {
+            parentUri = getDocumentUri(parentUri, directory, DocumentsContract.Document.MIME_TYPE_DIR) ?: return null
+        }
+        return getDocumentUri(parentUri, objectName)
+    }
+
+    private fun rootDocumentUri(): Uri = DocumentsContract.buildDocumentUriUsingTree(root, rootDocumentId)
 
     /**
      * Resolves or creates the [pathSegments] recursively from the [rootDocument].

@@ -35,4 +35,8 @@ class FakeDocumentsRepository(
 
         return newDocUri
     }
+
+    /** Stub implementation to make [DocumentsContract.deleteDocument] work. */
+    override fun deleteDocument(documentUri: Uri): Boolean =
+        documentStore.remove(DocumentsContract.getDocumentId(documentUri)) != null
 }

@@ -17,4 +17,7 @@ class DocumentsContractRepository(private val contentResolver: ContentResolver) 
             displayName
         )
     }
+
+    override fun deleteDocument(documentUri: Uri): Boolean =
+        DocumentsContract.deleteDocument(contentResolver, documentUri)
 }

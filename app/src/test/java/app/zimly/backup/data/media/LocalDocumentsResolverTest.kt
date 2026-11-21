@@ -10,6 +10,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -171,5 +174,40 @@ class LocalDocumentsResolverTest {
 
         assertTrue(result.authority == authority)
         assertTrue(result.path?.contains("Folder1/Folder2/test1.txt") == true)
+    }
+
+    @Test
+    fun deleteRemovesTheDocumentAndKeepsItsFolder() {
+        documentStore.add(folder1(), FakeDocument(TEST1_ID, "test1.txt", "text/plain", parentId = FOLDER1_ID))
+
+        writeableResolver().delete("Folder1/test1.txt")
+
+        assertNull(documentStore[TEST1_ID])
+        assertNotNull(documentStore[FOLDER1_ID])
+    }
+
+    @Test
+    fun deleteOfAMissingDocumentChangesNothing() {
+        documentStore.add(folder1())
+
+        writeableResolver().delete("Folder1/missing.txt")
+        writeableResolver().delete("Missing/missing.txt")
+
+        assertEquals(listOf(FOLDER1_ID), documentStore.list().map { it.id })
+    }
+
+    // Needs FakeDocumentsRepository.
+    private fun writeableResolver() = LocalDocumentsResolver(
+        context,
+        DocumentsContract.buildTreeDocumentUri(authority, "primary:Documents"),
+        FakeDocumentsRepository(authority, documentStore)
+    )
+
+    private fun folder1() =
+        FakeDocument(FOLDER1_ID, "Folder1", DocumentsContract.Document.MIME_TYPE_DIR, parentId = "primary:Documents")
+
+    private companion object {
+        const val FOLDER1_ID = "primary:Documents/Folder1"
+        const val TEST1_ID = "primary:Documents/Folder1/test1.txt"
     }
 }

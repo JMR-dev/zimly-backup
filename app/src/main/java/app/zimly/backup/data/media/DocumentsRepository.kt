@@ -9,4 +9,7 @@ import android.net.Uri
 interface DocumentsRepository {
 
     fun createDocument(parentDocumentUri: Uri, mimeType: String, displayName: String): Uri?
+
+    /** True when the document was deleted. */
+    fun deleteDocument(documentUri: Uri): Boolean
 }

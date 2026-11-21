@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.sample
 
@@ -89,11 +90,25 @@ class DownloadSyncService(
                     s3Obj.`object`(),
                     s3Obj.size(),
                     outputStream
-                )
+                ).onCompletion { failure -> if (failure != null) deletePartial(s3Obj.`object`(), failure) }
             }
             .toSyncProgress(diff.totalObjects, diff.totalBytes)
             .sampleWithLast(samplePeriod)
             .collect { emit(it) }
+    }
+
+    /**
+     * A download that failed or was cancelled partway leaves a cut-off file. Its timestamp is newer
+     * than the remote's, so later syncs would skip it for good. Deleting it lets the next sync
+     * download it again. A failure to delete is attached to [failure], which still ends the sync.
+     */
+    private fun deletePartial(objectPath: String, failure: Throwable) {
+        try {
+            localContentResolver.delete(objectPath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete the partial download $objectPath", e)
+            failure.addSuppressed(e)
+        }
     }
 
 }
