@@ -5,7 +5,6 @@ import app.zimly.backup.data.media.ContentObject
 import app.zimly.backup.data.media.LocalContentResolver
 import app.zimly.backup.data.s3.S3Object
 import app.zimly.backup.data.s3.S3Repository
-import io.minio.errors.ErrorResponseException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
@@ -66,16 +65,9 @@ class UploadSyncService(
 
             return UploadDiff(uploads.size, totalBytes, remotes, objects, uploads)
         } catch (e: Exception) {
-            var message = e.message
-            if (e is ErrorResponseException) {
-                val status = e.response().code
-                val mes = e.response().message
-                val errorCode = e.errorResponse().code()
-                message = "status: $status, message: $mes, errorCode: $errorCode"
-            }
-            Log.e(TAG, "Failed to create local diff: $message", e)
-            throw Exception("Failed to create local diff: $message", e)
-
+            val failure = diffFailure("Failed to create local diff", e)
+            Log.e(TAG, failure.message.orEmpty(), e)
+            throw failure
         }
     }
 

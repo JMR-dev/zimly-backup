@@ -13,7 +13,6 @@ import io.mockk.mockkStatic
 import io.mockk.verify
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -21,6 +20,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.time.ZonedDateTime
 import kotlin.test.assertFailsWith
 import kotlin.time.TimeSource
@@ -47,16 +47,30 @@ class PartialDownloadTest {
 
     @Test
     fun `a failed download deletes its partial file and fails the sync`() = runTest {
-        coEvery { s3.get(PATH, SIZE, any()) } returns failingDownload()
+        coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
 
         assertFailsWith<IOException> { sync() }
 
         verify(exactly = 1) { local.delete(PATH) }
     }
 
+    /**
+     * Opening the local file erases it, so a download that the server refuses (an archived object,
+     * a denied key) must not open it, and must not delete the old copy it never touched.
+     */
+    @Test
+    fun `a download refused before its file is opened keeps the local file`() = runTest {
+        coEvery { s3.get(PATH, SIZE, any()) } returns flow { throw IOException("refused") }
+
+        assertFailsWith<IOException> { sync() }
+
+        verify(exactly = 0) { local.createOutputStream(any(), any()) }
+        verify(exactly = 0) { local.delete(any()) }
+    }
+
     @Test
     fun `a completed download keeps its file`() = runTest {
-        coEvery { s3.get(PATH, SIZE, any()) } returns flowOf(progress(SIZE))
+        coEvery { s3.get(PATH, SIZE, any()) } answers { completedDownload(thirdArg()) }
 
         sync()
 
@@ -65,7 +79,7 @@ class PartialDownloadTest {
 
     @Test
     fun `a failure to delete is attached to the download error`() = runTest {
-        coEvery { s3.get(PATH, SIZE, any()) } returns failingDownload()
+        coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
         every { local.delete(PATH) } throws IOException("read-only storage")
 
         val error = assertFailsWith<IOException> { sync() }
@@ -86,9 +100,14 @@ class PartialDownloadTest {
 
     private suspend fun sync() = DownloadSyncService(s3, local, samplePeriod = 1).synchronize().toList()
 
-    private fun failingDownload(): Flow<Progress> = flow {
-        emit(progress(SIZE / 2))
+    /** Like the real download: opens the file once the server answers, then fails partway. */
+    private fun failingDownload(openOutput: () -> OutputStream): Flow<Progress> = flow {
+        openOutput().use { emit(progress(SIZE / 2)) }
         throw IOException("connection reset")
+    }
+
+    private fun completedDownload(openOutput: () -> OutputStream): Flow<Progress> = flow {
+        openOutput().use { emit(progress(SIZE)) }
     }
 
     private fun stat(): StatObjectResponse = mockk {

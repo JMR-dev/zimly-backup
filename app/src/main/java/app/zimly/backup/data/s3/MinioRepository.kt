@@ -179,9 +179,10 @@ class MinioRepository(
      * It's also important to note that in this case, network latency is already accounted for, which
      * is not the case for [put], hence we have to use the okio interceptor there.
      *
-     * It's also important to close the passed stream here.
+     * [openOutput] is called once the server answers with the object, and the stream it returns
+     * is closed here.
      */
-    override suspend fun get(name: String, size: Long, stream: OutputStream): Flow<Progress> =
+    override suspend fun get(name: String, size: Long, openOutput: () -> OutputStream): Flow<Progress> =
         channelFlow {
             val progressTracker = ProgressTracker(size)
 
@@ -190,11 +191,12 @@ class MinioRepository(
                 progressTracker.observe().collect { send(it) }
             }
 
-            // use { } closes the passed stream and the response on success and on any failure,
-            // a refused request's and a cancel's included. A failure ends the flow with that
-            // error, which also cancels the progress observer.
-            stream.use { output ->
-                getObject(name).use { response ->
+            // The output opens only once the server answers with the object: opening it may erase
+            // the local file, which a refused request must leave alone. use { } closes the
+            // response and the output on success and on any failure, a cancel's included. A
+            // failure ends the flow with that error, which also cancels the progress observer.
+            getObject(name).use { response ->
+                openOutput().use { output ->
                     withContext(Dispatchers.IO) { copyBody(response, output, progressTracker) }
                 }
             }
@@ -223,8 +225,10 @@ class MinioRepository(
 
     /**
      * Waits for minio's getObject call like kotlinx's await(): the failure's cause is unwrapped
-     * from minio's CompletionException, and cancelling the caller cancels the call. A response
-     * that arrives after a cancel is closed instead of leaking its connection.
+     * from minio's CompletionException. A response handed over after the caller is cancelled is
+     * closed. Cancelling only cancels minio's last stage, not the HTTP call under it: if that call
+     * answers after the cancel, minio never builds a response to close, and the connection is left
+     * to OkHttp's leak detection.
      */
     private suspend fun getObject(name: String): GetObjectResponse =
         suspendCancellableCoroutine { continuation ->
@@ -349,7 +353,7 @@ interface S3Repository {
     suspend fun bucketExists(): Boolean
     suspend fun get(name: String): GetObjectResponse
     suspend fun stat(name: String): StatObjectResponse
-    suspend fun get(name: String, size: Long, outputStream: OutputStream): Flow<Progress>
+    suspend fun get(name: String, size: Long, openOutput: () -> OutputStream): Flow<Progress>
     suspend fun remove(name: String)
 }
 
