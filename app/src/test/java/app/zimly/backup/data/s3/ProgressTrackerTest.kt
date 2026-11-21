@@ -105,6 +105,24 @@ class ProgressTrackerTest {
         MatcherAssert.assertThat(observed.last().percentage, `is`(1F))
     }
 
+    /**
+     * Past 2^24 bytes a Float can't tell the last few bytes apart: (size - 1) / size rounds to
+     * 1.0f for a 64 MiB object. Observing must still go on until every byte is counted.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun observingEndsWithTheLastByteOfALargeObject() = runTest {
+        val size = 64L * 1024 * 1024
+        val tracker = ProgressTracker(size)
+        val progress = async(UnconfinedTestDispatcher(testScheduler)) { tracker.observe().toList() }
+
+        tracker.stepBy(size - 1)
+        tracker.stepBy(1)
+
+        val observed = withTimeout(5.seconds) { progress.await() }
+        MatcherAssert.assertThat(observed.last().totalReadBytes, `is`(size))
+    }
+
     private companion object {
         const val BUFFERED_STEPS = 500L
         const val STEP_BYTES = 10L
