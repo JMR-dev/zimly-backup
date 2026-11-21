@@ -1,5 +1,6 @@
 package app.zimly.backup.data.s3
 
+import android.system.ErrnoException
 import android.util.Log
 import io.minio.BucketExistsArgs
 import io.minio.GetObjectArgs
@@ -370,16 +371,25 @@ interface S3Repository {
 }
 
 /**
- * The error a failed listing ends with. minio's listing iterator turns each transport failure
- * into an IllegalStateException that wraps the IOException, or that IOException's own cause
- * when it has one: on Android, a DNS failure's GaiException or a socket error's ErrnoException,
- * neither an IOException. A server's error comes as a MinioException instead. So every one of
- * these becomes an IOException, which the sync retries.
+ * The error a failed listing ends with. minio's listing iterator wraps any failure that isn't
+ * its own exception in an IllegalStateException: for a transport failure, the IOException, or
+ * that IOException's own cause when it has one. On Android that cause is a DNS failure's
+ * GaiException or a socket error's ErrnoException, neither an IOException. Those become an
+ * IOException, which the sync retries; any other cause, such as a bug, is handed over as it is
+ * and fails the sync with its message.
  */
-private fun listingFailure(e: IllegalStateException): IOException {
-    val cause = e.cause ?: e
-    return cause as? IOException ?: IOException("Listing the bucket failed: ${cause.message}", cause)
+private fun listingFailure(e: IllegalStateException): Exception = when (val cause = e.cause) {
+    is IOException -> cause
+    null -> e
+    else -> if (isAndroidNetworkError(cause)) IOException("Listing the bucket failed: ${cause.message}", cause) else e
 }
+
+/**
+ * GaiException is hidden from the SDK, so it is matched by name; it hasn't moved since Android 5,
+ * and the app needs Android 10.
+ */
+private fun isAndroidNetworkError(cause: Throwable): Boolean =
+    cause is ErrnoException || cause.javaClass.name == "android.system.GaiException"
 
 /**
  * Wraps the [Source] in a [ForwardingSource] that emits the bytes read to the passed [ProgressTracker].
