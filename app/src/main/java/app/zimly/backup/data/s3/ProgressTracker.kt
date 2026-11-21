@@ -50,7 +50,7 @@ class ProgressTracker(private val size: Long) {
         progressFlow.emit(Step.Finished(transferred.get(), timeSource.markNow()))
     }
 
-    /** Completes at 100% or at [finish], whichever comes first. */
+    /** Completes once every byte of the size is counted, or at [finish], whichever comes first. */
     fun observe(): Flow<Progress> {
         return progressFlow
             .transformWhile { step ->
@@ -58,10 +58,11 @@ class ProgressTracker(private val size: Long) {
                 step is Step.Read
             }
             .runningFold(start) { acc, step -> progressAt(acc, step) }
-            // takeWhile { it.percentage <= 1.0 } does not work ¯\_(ツ)_/¯
+            // Ends on the bytes, not the Float percentage: past 2^24 bytes, a total a few bytes
+            // short of the size already rounds to 100%.
             .transformWhile {
                 emit(it)
-                it.percentage < 1.0
+                it.totalReadBytes < size
             }
     }
 

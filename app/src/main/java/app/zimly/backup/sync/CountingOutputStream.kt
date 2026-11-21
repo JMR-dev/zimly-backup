@@ -16,6 +16,8 @@ internal class CountingOutputStream(private val out: OutputStream) : OutputStrea
     var isClosed = false
         private set
 
+    private var closeAttempted = false
+
     override fun write(b: Int) {
         out.write(b)
         count++
@@ -28,8 +30,14 @@ internal class CountingOutputStream(private val out: OutputStream) : OutputStrea
 
     override fun flush() = out.flush()
 
-    /** Closes [out]; [isClosed] turns true only if that succeeded, so every byte was handed over. */
+    /**
+     * Closes [out]; [isClosed] turns true only if that succeeded, so every byte was handed over.
+     * Only the first call closes: a download closes the stream twice, and a second close of a
+     * stream whose first close failed returns normally without having saved anything.
+     */
     override fun close() {
+        if (closeAttempted) return
+        closeAttempted = true
         out.close()
         isClosed = true
     }
