@@ -71,9 +71,9 @@ class SyncWorker(
     }
 
     /**
-     * Fail or retry depending on the thrown error and on how many runs it has had.
+     * Fail or retry depending on the thrown error.
      */
-    private fun onError(it: Throwable): Result = syncResultOf(it, runAttemptCount)
+    private fun onError(it: Throwable): Result = syncResultOf(it)
 
     companion object {
         val TAG: String? = SyncWorker::class.simpleName
