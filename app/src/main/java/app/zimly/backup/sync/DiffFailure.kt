@@ -1,6 +1,6 @@
 package app.zimly.backup.sync
 
-import io.minio.errors.ErrorResponseException
+import app.zimly.backup.data.s3.s3ErrorMessage
 import java.io.IOException
 
 /**
@@ -9,14 +9,6 @@ import java.io.IOException
  * anything else becomes a plain Exception.
  */
 internal fun diffFailure(description: String, cause: Exception): Exception {
-    val message = "$description: ${details(cause)}"
+    val message = "$description: ${s3ErrorMessage(cause)}"
     return if (cause is IOException) IOException(message, cause) else Exception(message, cause)
 }
-
-private fun details(cause: Exception): String? =
-    if (cause is ErrorResponseException) {
-        "status: ${cause.response().code}, message: ${cause.response().message}, " +
-            "errorCode: ${cause.errorResponse().code()}"
-    } else {
-        cause.message
-    }
