@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.service.notification.StatusBarNotification
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -24,11 +25,13 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -40,6 +43,7 @@ import org.junit.runner.RunWith
 import java.io.IOException
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -88,7 +92,7 @@ class SyncWorkerRetryTest {
         // The third run (count 2) waits 4 minutes.
         assertTrue("$nextTry", nextTry.at in (before + 4.minutes.inWholeMilliseconds)..(System.currentTimeMillis() + 4.minutes.inWholeMilliseconds))
         // The first failure of a streak alerts.
-        assertEquals(Notification.GROUP_ALERT_ALL, activeRetryNotification()?.notification?.groupAlertBehavior)
+        assertNotNull("an alerting retry notification", awaitRetryNotification { it.notification.groupAlertBehavior == Notification.GROUP_ALERT_ALL })
     }
 
     @Test
@@ -99,7 +103,7 @@ class SyncWorkerRetryTest {
 
         runSync(runAttemptCount = 4)
 
-        assertEquals(Notification.GROUP_ALERT_SUMMARY, activeRetryNotification()?.notification?.groupAlertBehavior)
+        assertNotNull("a quiet retry notification", awaitRetryNotification { it.notification.groupAlertBehavior == Notification.GROUP_ALERT_SUMMARY })
     }
 
     /** A long backup that keeps finishing files isn't failing, however long ago its first blip was. */
@@ -117,7 +121,7 @@ class SyncWorkerRetryTest {
         assertTrue("$result", result is Result.Retry)
         val firstFailedAt = checkNotNull(db.syncRetryDao().load(REMOTE_ID)) { "no retry recorded" }.firstFailedAt
         assertTrue("failing since $firstFailedAt, before $now", firstFailedAt >= now)
-        assertEquals(Notification.GROUP_ALERT_ALL, activeRetryNotification()?.notification?.groupAlertBehavior)
+        assertNotNull("an alerting retry notification", awaitRetryNotification { it.notification.groupAlertBehavior == Notification.GROUP_ALERT_ALL })
     }
 
     @Test
@@ -133,7 +137,7 @@ class SyncWorkerRetryTest {
             (result as Result.Failure).outputData.getString(SyncOutputs.ERROR),
         )
         assertNull("forgotten", db.syncRetryDao().load(REMOTE_ID))
-        assertNotNull("failure notification", activeRetryNotification())
+        assertNotNull("failure notification", awaitRetryNotification { true })
     }
 
     @Test
@@ -147,7 +151,7 @@ class SyncWorkerRetryTest {
 
         assertTrue("$result", result is Result.Success)
         assertNull("forgotten", db.syncRetryDao().load(REMOTE_ID))
-        assertNull("notification gone", activeRetryNotification())
+        assertTrue("notification gone", awaitNoRetryNotification())
     }
 
     /**
@@ -181,6 +185,28 @@ class SyncWorkerRetryTest {
         context.getSystemService(NotificationManager::class.java).activeNotifications
             .firstOrNull { it.id == REMOTE_ID && it.tag == RetryNotification.TAG }
 
+    /**
+     * The retry notification once it matches [expected]. Android posts and cancels notifications
+     * asynchronously, so a just-posted one can take a moment to show, and a dismissed one from the
+     * previous test a moment to go; this polls for up to [NOTIFICATION_WAIT].
+     */
+    private suspend fun awaitRetryNotification(expected: (StatusBarNotification) -> Boolean): StatusBarNotification? =
+        withTimeoutOrNull(NOTIFICATION_WAIT) {
+            var match = activeRetryNotification()?.takeIf(expected)
+            while (match == null) {
+                delay(POLL_INTERVAL)
+                match = activeRetryNotification()?.takeIf(expected)
+            }
+            match
+        }
+
+    /** Whether the retry notification is gone within [NOTIFICATION_WAIT]. */
+    private suspend fun awaitNoRetryNotification(): Boolean =
+        withTimeoutOrNull(NOTIFICATION_WAIT) {
+            while (activeRetryNotification() != null) delay(POLL_INTERVAL)
+            true
+        } ?: false
+
     private fun allowNotifications() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         InstrumentationRegistry.getInstrumentation().uiAutomation
@@ -199,5 +225,7 @@ class SyncWorkerRetryTest {
 
     private companion object {
         const val REMOTE_ID = 900_001
+        val NOTIFICATION_WAIT = 5.seconds
+        val POLL_INTERVAL = 50.milliseconds
     }
 }

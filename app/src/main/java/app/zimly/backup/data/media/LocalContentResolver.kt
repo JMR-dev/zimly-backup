@@ -29,13 +29,20 @@ interface LocalContentResolver {
 }
 
 interface WriteableContentResolver : LocalContentResolver {
-    fun createOutputStream(objectPath: String, mimeType: String): OutputStream
 
     /**
-     * Deletes the document at [objectPath], such as one whose download failed partway. Does
-     * nothing when there is no such document.
+     * Opens the document at [objectPath] for writing, replacing what it held; creates it, and its
+     * folders, when missing.
      */
-    fun delete(objectPath: String)
+    fun openForWriting(objectPath: String): OpenedDocument
+
+    /**
+     * Deletes [document], such as one whose download failed partway. It goes by the document's
+     * own Uri, not its name, so it can't miss a document the storage provider named differently.
+     */
+    fun delete(document: Uri)
 }
 
+/** A document opened for writing: where it is, and the stream that writes it. */
+class OpenedDocument(val uri: Uri, val stream: OutputStream)
 

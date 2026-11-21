@@ -115,7 +115,7 @@ class SyncResultTest {
         val repository = MinioRepository(url, "key", "secret", "bucket", "us-east-1", httpClient = client)
         val local: WriteableContentResolver = mockk(relaxed = true)
         val error = try {
-            withTimeout(10.seconds) { DownloadSyncService(repository, local).synchronize().toList() }
+            withTimeout(10.seconds) { DownloadSyncService(repository, local, FakeDownloadsInProgress()).synchronize().toList() }
             null
         } catch (e: TimeoutCancellationException) {
             throw AssertionError("The sync neither failed nor finished", e)

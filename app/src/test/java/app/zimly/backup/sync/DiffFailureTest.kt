@@ -33,7 +33,7 @@ class DiffFailureTest {
     fun `a network error while listing for a download is an IO error`() = runTest {
         val local: WriteableContentResolver = mockk()
 
-        assertFailsWith<IOException> { DownloadSyncService(s3, local, samplePeriod = 1).synchronize().toList() }
+        assertFailsWith<IOException> { DownloadSyncService(s3, local, FakeDownloadsInProgress(), samplePeriod = 1).synchronize().toList() }
     }
 
     @Test

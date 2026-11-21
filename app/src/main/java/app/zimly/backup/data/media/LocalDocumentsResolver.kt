@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
+import android.webkit.MimeTypeMap
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -21,6 +22,7 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
 
     companion object {
         private val TAG: String? = LocalDocumentsResolver::class.simpleName
+        private const val OCTET_STREAM = "application/octet-stream"
 
         /**
          * Strips off the storage type path from the documentId, e.g. "primary:some/path" -> "some/path".
@@ -108,16 +110,16 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
     }
 
     /**
-     * Creates a [OutputStream] for a given document identified by [objectPath]. Creates the document
-     * including parent directories if not existing. If opening fails, a document this call created
-     * is removed again, so no empty file with a fresh timestamp is left for later syncs to skip.
+     * Opens the document at [objectPath], creating it and its parent folders when missing. If
+     * opening fails, a document this call created is removed again, so no empty file with a fresh
+     * timestamp is left for later syncs to skip.
      */
-    override fun createOutputStream(objectPath: String, mimeType: String): OutputStream {
+    override fun openForWriting(objectPath: String): OpenedDocument {
         val (parentUri, objectName) = createOrFindParent(objectPath)
         val existing = getDocumentUri(parentUri, objectName)
-        val document = existing ?: createDocument(parentUri, mimeType, objectName)
+        val document = existing ?: createDocument(parentUri, objectName)
         return try {
-            getOutputStream(document)
+            OpenedDocument(document, getOutputStream(document))
         } catch (e: Exception) {
             if (existing == null) removeAfterFailedOpen(document, e)
             throw e
@@ -139,9 +141,9 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
      * Takes a complete [objectPath], e.g. Pictures/2025/picture.png, and creates the directory path
      * if it's missing and an empty Document with the trailing objectName and returns the [Uri].
      */
-    internal fun createOrFindDocument(objectPath: String, mimeType: String): Uri {
+    internal fun createOrFindDocument(objectPath: String): Uri {
         val (parentUri, objectName) = createOrFindParent(objectPath)
-        return getDocumentUri(parentUri, objectName) ?: createDocument(parentUri, mimeType, objectName)
+        return getDocumentUri(parentUri, objectName) ?: createDocument(parentUri, objectName)
     }
 
     /**
@@ -153,26 +155,26 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
         return createOrFindDirectory(rootDocumentUri(), directories) to objectName
     }
 
-    private fun createDocument(parentUri: Uri, mimeType: String, name: String): Uri =
-        documentsRepository.createDocument(parentUri, mimeType, name)
+    private fun createDocument(parentUri: Uri, name: String): Uri =
+        documentsRepository.createDocument(parentUri, mimeTypeFor(name), name)
             ?: throw IOException("Failed to create file in $parentUri")
 
+    /**
+     * The type to create a document named [name] with. The storage provider appends a type's own
+     * extension when the name's extension doesn't match it ("README" as text/plain becomes
+     * "README.txt"), and the next sync wouldn't find the file under its key. So the type comes from
+     * the name: its extension's type, or application/octet-stream, which the provider never extends.
+     */
+    private fun mimeTypeFor(name: String): String {
+        val extension = name.substringAfterLast('.', "").lowercase()
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: OCTET_STREAM
+    }
+
     /** Leaves the document's folders in place, even when they end up empty. */
-    override fun delete(objectPath: String) {
-        val document = findDocument(objectPath) ?: return
+    override fun delete(document: Uri) {
         if (!documentsRepository.deleteDocument(document)) {
             throw IOException("Failed to delete $document")
         }
-    }
-
-    /** The document at [objectPath], or null when it or one of its folders is missing. Creates nothing. */
-    private fun findDocument(objectPath: String): Uri? {
-        val (directories, objectName) = extractPath(objectPath)
-        var parentUri = rootDocumentUri()
-        for (directory in directories) {
-            parentUri = getDocumentUri(parentUri, directory, DocumentsContract.Document.MIME_TYPE_DIR) ?: return null
-        }
-        return getDocumentUri(parentUri, objectName)
     }
 
     private fun rootDocumentUri(): Uri = DocumentsContract.buildDocumentUriUsingTree(root, rootDocumentId)
@@ -186,6 +188,13 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
         for (directory in pathSegments) {
             var uri = getDocumentUri(currentUri, directory, DocumentsContract.Document.MIME_TYPE_DIR)
             if (uri == null) {
+                // A file in the folder's place would make the provider create "Camera (1)" instead,
+                // and every later sync another copy. Not an IOException: retrying can't move it.
+                if (getDocumentUri(currentUri, directory) != null) {
+                    throw IllegalStateException(
+                        "A file named '$directory' is where the folder '$directory' belongs. Move or rename it, then sync again."
+                    )
+                }
                 uri = documentsRepository.createDocument(
                     currentUri,
                     DocumentsContract.Document.MIME_TYPE_DIR,

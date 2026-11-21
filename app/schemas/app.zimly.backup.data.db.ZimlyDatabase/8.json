@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 8,
-    "identityHash": "92939abbec5bf47976d80bd69bc0bddf",
+    "identityHash": "955cd13d99251cc4e88c152ea80a7b77",
     "entities": [
       {
         "tableName": "Remote",
@@ -169,11 +169,49 @@
             ]
           }
         ]
+      },
+      {
+        "tableName": "download_in_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`remote_id` INTEGER NOT NULL, `object_key` TEXT NOT NULL, PRIMARY KEY(`remote_id`, `object_key`), FOREIGN KEY(`remote_id`) REFERENCES `Remote`(`uid`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remote_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "key",
+            "columnName": "object_key",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "remote_id",
+            "object_key"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "Remote",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "remote_id"
+            ],
+            "referencedColumns": [
+              "uid"
+            ]
+          }
+        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '92939abbec5bf47976d80bd69bc0bddf')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '955cd13d99251cc4e88c152ea80a7b77')"
     ]
   }
 }
