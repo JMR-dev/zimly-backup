@@ -1,6 +1,7 @@
 package app.zimly.backup.sync
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -66,7 +67,29 @@ class RetryNotificationTest {
         assertEquals(listOf("Cancel"), notification.actions.map { it.title.toString() })
         assertSame(cancel, notification.actions.single().actionIntent)
         assertFalse("dismissable", notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
-        assertEquals(SyncNotification.CHANNEL_ID, notification.channelId)
+    }
+
+    /**
+     * Problems have their own channel at normal importance, so they don't land in the quiet
+     * progress channel's Silent section, and hiding the progress bar doesn't hide them.
+     */
+    @Test
+    fun `problems post on their own channel at normal importance`() {
+        val notification = retrying()
+
+        assertEquals(RetryNotification.CHANNEL_ID, notification.channelId)
+        val channel = context.getSystemService(NotificationManager::class.java).getNotificationChannel(RetryNotification.CHANNEL_ID)
+        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+    }
+
+    /**
+     * Retries come at 1, 2, 4, 8 minutes and on: only the first failure of a streak makes a sound.
+     * NotificationCompat silences a notification by having only a group summary alert.
+     */
+    @Test
+    fun `a retry after the first one updates quietly`() {
+        assertEquals(Notification.GROUP_ALERT_ALL, retrying(alert = true).groupAlertBehavior)
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, retrying(alert = false).groupAlertBehavior)
     }
 
     @Test
@@ -79,13 +102,14 @@ class RetryNotificationTest {
             notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString(),
         )
         assertTrue("auto cancel", notification.flags and Notification.FLAG_AUTO_CANCEL != 0)
-        assertEquals(SyncNotification.CHANNEL_ID, notification.channelId)
+        assertEquals(RetryNotification.CHANNEL_ID, notification.channelId)
+        assertEquals(Notification.GROUP_ALERT_ALL, notification.groupAlertBehavior)
     }
 
     /** A retry at 3:42 PM, shown at 3:00 PM the same day, so the text shows only the time. */
-    private fun retrying(): Notification {
+    private fun retrying(alert: Boolean = true): Notification {
         val now = ZonedDateTime.of(2026, 11, 21, 15, 0, 0, 0, ZoneOffset.UTC)
         val at = now.withMinute(42).toInstant().toEpochMilli()
-        return RetryNotification.retrying(context, NextTry("Connection reset", at), cancel, now.toInstant().toEpochMilli())
+        return RetryNotification.retrying(context, NextTry("Connection reset", at), cancel, alert, now.toInstant().toEpochMilli())
     }
 }
