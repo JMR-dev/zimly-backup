@@ -42,6 +42,7 @@ import java.io.OutputStream
 import java.time.ZonedDateTime
 import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration.Companion.seconds
 
@@ -83,11 +84,32 @@ class MinioRepository(
      *     relies on virtual host style, things won't work.
      *   * Minio Java SDK is .. bad :(
      *
+     * One client serves the repository's whole life: minio caches the bucket's region in it, and
+     * a new client for every call asked the server for that region again, for every file.
      */
-    private fun mc(uploadProgressTracker: ProgressTracker? = null): MinioAsyncClient {
+    private val mc: MinioAsyncClient by lazy { buildClient() }
+
+    /**
+     * The progress tracker of the upload in flight, which the client's upload interceptor reports
+     * to. A sync uploads one file at a time; [put] refuses a second concurrent upload rather than
+     * mix their progress.
+     */
+    private val uploadInFlight = AtomicReference<ProgressTracker?>(null)
+
+    /** The upload's HTTP calls, which a cancel stops (see [putObject]). */
+    private val uploadCalls = UploadCalls { uploadInFlight.get() != null }
+
+    /**
+     * Builds the repository's minio client (see [mc]).
+     */
+    private fun buildClient(): MinioAsyncClient {
         try {
+            val uploadClient = httpClient.newBuilder()
+                .addInterceptor(uploadCalls)
+                .addInterceptor(UploadProgressInterceptor(uploadInFlight::get))
+                .build()
             val client = MinioAsyncClient.builder()
-                .httpClient(httpClient.withUploadProgress(uploadProgressTracker))
+                .httpClient(uploadClient)
                 .endpoint(url)
                 .region(region) // This might override some AWS stuff happening inside #endpoint()
                 .credentials(key, secret)
@@ -111,6 +133,9 @@ class MinioRepository(
 
         /** How much a download reads between checks for a cancel. */
         private const val COPY_CHUNK_BYTES = 64L * 1024
+
+        /** How many parts of a multipart upload go up at once, see [putObject]. */
+        private const val PARALLEL_PARTS = 2
 
         /**
          * Creates a http client with optional [UploadProgressInterceptor].
@@ -140,7 +165,7 @@ class MinioRepository(
          */
         private fun OkHttpClient.withUploadProgress(tracker: ProgressTracker?): OkHttpClient =
             if (tracker == null) this
-            else newBuilder().addInterceptor(UploadProgressInterceptor(tracker)).build()
+            else newBuilder().addInterceptor(UploadProgressInterceptor { tracker }).build()
     }
 
 
@@ -149,10 +174,10 @@ class MinioRepository(
     // cancels the call.
 
     override suspend fun bucketExists(): Boolean =
-        mc().bucketExists(BucketExistsArgs.builder().bucket(bucket).build()).await()
+        mc.bucketExists(BucketExistsArgs.builder().bucket(bucket).build()).await()
 
     override fun listObjects(): List<S3Object> = try {
-        mc().listObjects(ListObjectsArgs.builder().bucket(bucket).recursive(true).build())
+        mc.listObjects(ListObjectsArgs.builder().bucket(bucket).recursive(true).build())
             .map { it.get() }
             .map {
                 val name = it.objectName()
@@ -166,11 +191,11 @@ class MinioRepository(
     }
 
     override suspend fun createBucket(bucket: String) {
-        mc().makeBucket(MakeBucketArgs.builder().bucket(bucket).build()).await()
+        mc.makeBucket(MakeBucketArgs.builder().bucket(bucket).build()).await()
     }
 
     override suspend fun stat(name: String): StatObjectResponse =
-        mc().statObject(StatObjectArgs.builder().`object`(name).bucket(bucket).build()).await()
+        mc.statObject(StatObjectArgs.builder().`object`(name).bucket(bucket).build()).await()
 
     override suspend fun get(name: String): GetObjectResponse = getObject(name)
 
@@ -221,7 +246,7 @@ class MinioRepository(
      * size was read), so the loop ends after at most [size] + 1 bytes.
      */
     private suspend fun copyBody(response: GetObjectResponse, output: OutputStream, size: Long, tracker: ProgressTracker) {
-        val body = response.source().counted(tracker)
+        val body = response.source().counted(tracker::stepBy)
         output.sink().buffer().use { sink ->
             var copied = 0L
             while (true) { // Ends at the end of the body, past [size], or at a cancel.
@@ -245,7 +270,7 @@ class MinioRepository(
      */
     private suspend fun getObject(name: String): GetObjectResponse =
         suspendCancellableCoroutine { continuation ->
-            val future = mc().getObject(GetObjectArgs.builder().bucket(bucket).`object`(name).build())
+            val future = mc.getObject(GetObjectArgs.builder().bucket(bucket).`object`(name).build())
             future.whenComplete { response, failure ->
                 if (failure != null) {
                     continuation.resumeWithException((failure as? CompletionException)?.cause ?: failure)
@@ -257,7 +282,7 @@ class MinioRepository(
         }
 
     override suspend fun remove(name: String) {
-        mc().removeObject(RemoveObjectArgs.builder().bucket(bucket).`object`(name).build()).await()
+        mc.removeObject(RemoveObjectArgs.builder().bucket(bucket).`object`(name).build()).await()
     }
 
     fun removeAll() {
@@ -269,7 +294,7 @@ class MinioRepository(
             .objects(delObjs)
             .build()
 
-        mc().removeObjects(params).forEach {
+        mc.removeObjects(params).forEach {
             val err = it.get()
             err?.let { Log.e(TAG, "Error deleting ${err.objectName()}: ${err.message()}") }
         }
@@ -296,13 +321,17 @@ class MinioRepository(
             progressTracker.observe().collect { send(it) }
         }
 
-        val client = mc(uploadProgressTracker = progressTracker)
+        check(uploadInFlight.compareAndSet(null, progressTracker)) { "Another upload is already running on $bucket" }
         try {
-            openStream().use { putObject(client, it, name, contentType, size) }
-        } catch (e: Exception) {
-            if (!e.isChecksumAlgorithmRejection()) throw e
-            Log.i(TAG, "Retrying $name with an uppercase checksum algorithm: ${e.message}")
-            openStream().use { UppercaseChecksumUpload(client, bucket).upload(it, name, contentType, size) }
+            try {
+                openStream().use { putObject(mc, it, name, contentType, size) }
+            } catch (e: Exception) {
+                if (!e.isChecksumAlgorithmRejection()) throw e
+                Log.i(TAG, "Retrying $name with an uppercase checksum algorithm: ${e.message}")
+                openStream().use { UppercaseChecksumUpload(mc, bucket).upload(it, name, contentType, size) }
+            }
+        } finally {
+            uploadInFlight.set(null)
         }
         // The upload is done: end observing even if dropped steps left it short of 100%.
         progressTracker.finish()
@@ -313,9 +342,10 @@ class MinioRepository(
      *
      * minio aborts a failed multipart upload in a handler on the future putObject returns, and a
      * cancelled future never runs that handler. So this waits without cancelling the future. If
-     * the caller is cancelled, it stops the source, minio fails at its next read and aborts, and
-     * this waits for that (up to [CANCEL_SETTLE_TIMEOUT]) before the caller closes the stream.
-     * A cancel during the last part can't stop it: that upload completes.
+     * the caller is cancelled, it stops the source and cancels the parts in flight (minio reads
+     * parts ahead, so the source alone may never be read again); minio fails and aborts, and this
+     * waits for that (up to [CANCEL_SETTLE_TIMEOUT]) before the caller closes the stream. A cancel
+     * after every part is sent can't stop it: that upload completes.
      */
     private suspend fun putObject(
         client: MinioAsyncClient,
@@ -330,6 +360,9 @@ class MinioRepository(
             .`object`(name)
             .contentType(contentType)
             .stream(source, size, -1)
+            // Two parts at once overlap one part's server commit and round trip with the next
+            // part's transfer; each holds a part buffer (about 8 MiB) in memory, so not more.
+            .parallelUploads(PARALLEL_PARTS)
             .build()
         // asDeferred: awaiting the Deferred can be cancelled without cancelling minio's future.
         val upload = client.putObject(args).asDeferred()
@@ -337,6 +370,7 @@ class MinioRepository(
             upload.await()
         } catch (e: CancellationException) {
             source.stop()
+            uploadCalls.cancelInFlight()
             waitForMinioToSettle(upload)
             throw e
         }
@@ -391,17 +425,23 @@ private fun listingFailure(e: IllegalStateException): Exception = when (val caus
 private fun isAndroidNetworkError(cause: Throwable): Boolean =
     cause is ErrnoException || cause.javaClass.name == "android.system.GaiException"
 
+/** How many read bytes go into one progress step: reporting every ~8 KiB read cost real CPU. */
+internal const val PROGRESS_STEP_BYTES = 256L * 1024
+
 /**
- * Wraps the [Source] in a [ForwardingSource] that emits the bytes read to the passed [ProgressTracker].
+ * Wraps the [Source] in a [ForwardingSource] that reports the bytes read to [step], once at least
+ * [PROGRESS_STEP_BYTES] have gathered, and the rest at the end of the source.
  */
-fun Source.counted(tracker: ProgressTracker): Source {
-    return object : ForwardingSource(this) {
-        override fun read(sink: Buffer, byteCount: Long): Long {
-            val bytesRead = super.read(sink, byteCount)
-            if (bytesRead > 0) {
-                tracker.stepBy(bytesRead)
-            }
-            return bytesRead
+internal fun Source.counted(step: (Long) -> Unit): Source = object : ForwardingSource(this) {
+    private var unreported = 0L
+
+    override fun read(sink: Buffer, byteCount: Long): Long {
+        val bytesRead = super.read(sink, byteCount)
+        if (bytesRead > 0) unreported += bytesRead
+        if (unreported >= PROGRESS_STEP_BYTES || (bytesRead == -1L && unreported > 0)) {
+            step(unreported)
+            unreported = 0
         }
-    }.buffer()
+        return bytesRead
+    }
 }
