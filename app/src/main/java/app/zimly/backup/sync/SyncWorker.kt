@@ -86,41 +86,45 @@ class SyncWorker(
      *
      * It asks only when [mayStartForegroundService]: WorkManager moves the work into its foreground
      * bookkeeping before Android refuses a start, and doesn't undo that, so the work would then
-     * ignore Android's stop requests. From the background (a retry, for example) the sync runs as
-     * an ordinary job, under the limit. A refusal that still happens, in a race, stops the asking.
+     * ignore Android's stop requests. A sync that starts in the background (a retry, for example)
+     * runs as an ordinary job, and moves to the foreground at the next progress step after the
+     * user opens the app. Until then, a file that needs longer than the limit restarts on every
+     * run; resuming uploads across runs is what fixes that.
      */
     private inner class ForegroundProgress {
         private val steps = PercentSteps()
         private val cancel by lazy {
             WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
         }
-        private var allowed = true
+        private var inForeground = false
 
         suspend fun start() {
-            allowed = mayStartForegroundService()
-            if (allowed) {
+            if (mayStartForegroundService()) {
                 show(percent = null)
             } else {
-                Log.i(TAG, "The app is in the background: the sync runs as an ordinary job")
+                Log.i(TAG, "The app is in the background: the sync runs as an ordinary job for now")
             }
         }
 
+        /** Updates the notification once per whole percent, moving to the foreground if it now can. */
         suspend fun update(percentage: Float) {
-            if (!allowed) return
-            steps.next(percentage)?.let { show(it) }
+            val percent = steps.next(percentage) ?: return
+            if (inForeground || mayStartForegroundService()) show(percent)
         }
 
         private suspend fun show(percent: Int?) {
             val info = SyncNotification.foregroundInfo(
                 applicationContext, remoteIdOf(inputData), percent, cancel
             )
-            allowed = try {
+            inForeground = try {
                 setForeground(info)
                 true
             } catch (e: CancellationException) {
                 throw e // A CancellationException is an IllegalStateException: don't treat it as a refusal.
             } catch (e: IllegalStateException) {
-                Log.w(TAG, "Sync runs without a foreground notification, under the 10-minute limit", e)
+                // A race between the check and the start. WorkManager may now count the work as
+                // foreground anyway (see above); a later accepted start puts that right.
+                Log.w(TAG, "Android refused the foreground start; asking again at the next progress step", e)
                 false
             }
         }
@@ -158,7 +162,7 @@ class SyncWorker(
                 .build()
 
         /** Whether this process may start a foreground service now (see [mayStartForegroundService]). */
-        fun mayStartForegroundService(): Boolean =
+        internal fun mayStartForegroundService(): Boolean =
             mayStartForegroundService(Build.VERSION.SDK_INT, currentImportance())
 
         /**

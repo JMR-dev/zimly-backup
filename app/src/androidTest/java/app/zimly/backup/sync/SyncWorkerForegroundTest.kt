@@ -78,7 +78,8 @@ class SyncWorkerForegroundTest {
         }
 
         assertTrue(result is Success)
-        assertEquals("no retries after a refusal", 1, attempts.size)
+        // While the app is in the foreground it asks again at each progress step: the start and 0, 50, 100.
+        assertEquals(4, attempts.size)
     }
 
     /**
@@ -97,6 +98,22 @@ class SyncWorkerForegroundTest {
 
         assertTrue(result is Success)
         assertTrue("no foreground requests", attempts.isEmpty())
+    }
+
+    /** A sync that started in the background moves to the foreground once the user opens the app. */
+    @Test
+    fun syncMovesToTheForegroundWhenTheAppComesBack() {
+        every { SyncWorker.mayStartForegroundService() } returnsMany listOf(false, true)
+        val updates = CopyOnWriteArrayList<ForegroundInfo>()
+
+        val result = runSync { _, _, info ->
+            updates += info
+            Futures.immediateVoidFuture()
+        }
+
+        assertTrue(result is Success)
+        // Not at the start; from the first progress step on, each whole percent once.
+        assertEquals(listOf(0, 50, 100), updates.map { it.notification.percent() })
     }
 
     private fun runSync(foreground: ForegroundUpdater) = runBlocking {
