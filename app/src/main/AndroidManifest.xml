@@ -21,6 +21,14 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- A sync runs as a foreground data sync job, so Android doesn't stop it after the
+         10-minute limit for background work. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Shows that sync's progress notification (Android 13+ asks the user). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- usesCleartextTraffic: for non ssl communication with minio -->
     <!-- ??  enableOnBackInvokedCallback ?? -->
     <application
@@ -44,6 +52,13 @@
         </activity>
         <activity android:name=".CrashActivity">
         </activity>
+
+        <!-- WorkManager's foreground service, which runs SyncWorker after setForeground. Android
+             14+ requires its foreground service type. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
     </application>
 
