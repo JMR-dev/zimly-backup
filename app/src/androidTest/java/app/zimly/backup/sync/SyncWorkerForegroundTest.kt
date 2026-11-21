@@ -44,7 +44,7 @@ class SyncWorkerForegroundTest {
         )
         mockkObject(SyncWorker)
         coEvery { SyncWorker.initSyncService(any(), any()) } returns syncService
-        every { SyncWorker.mayStartForegroundService() } returns true
+        every { SyncWorker.mayStartForegroundService(any()) } returns true
     }
 
     @After
@@ -88,7 +88,7 @@ class SyncWorkerForegroundTest {
      */
     @Test
     fun syncDoesNotAskForTheForegroundFromTheBackground() {
-        every { SyncWorker.mayStartForegroundService() } returns false
+        every { SyncWorker.mayStartForegroundService(any()) } returns false
         val attempts = CopyOnWriteArrayList<ForegroundInfo>()
 
         val result = runSync { _, _, info ->
@@ -103,7 +103,7 @@ class SyncWorkerForegroundTest {
     /** A sync that started in the background moves to the foreground once the user opens the app. */
     @Test
     fun syncMovesToTheForegroundWhenTheAppComesBack() {
-        every { SyncWorker.mayStartForegroundService() } returnsMany listOf(false, true)
+        every { SyncWorker.mayStartForegroundService(any()) } returnsMany listOf(false, true)
         val updates = CopyOnWriteArrayList<ForegroundInfo>()
 
         val result = runSync { _, _, info ->

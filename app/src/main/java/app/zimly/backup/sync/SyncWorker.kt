@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.ActivityManager.RunningAppProcessInfo
 import android.content.Context
 import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -99,7 +100,7 @@ class SyncWorker(
         private var inForeground = false
 
         suspend fun start() {
-            if (mayStartForegroundService()) {
+            if (mayStartForegroundService(applicationContext)) {
                 show(percent = null)
             } else {
                 Log.i(TAG, "The app is in the background: the sync runs as an ordinary job for now")
@@ -109,7 +110,7 @@ class SyncWorker(
         /** Updates the notification once per whole percent, moving to the foreground if it now can. */
         suspend fun update(percentage: Float) {
             val percent = steps.next(percentage) ?: return
-            if (inForeground || mayStartForegroundService()) show(percent)
+            if (inForeground || mayStartForegroundService(applicationContext)) show(percent)
         }
 
         private suspend fun show(percent: Int?) {
@@ -122,8 +123,10 @@ class SyncWorker(
             } catch (e: CancellationException) {
                 throw e // A CancellationException is an IllegalStateException: don't treat it as a refusal.
             } catch (e: IllegalStateException) {
-                // A race between the check and the start. WorkManager may now count the work as
-                // foreground anyway (see above); a later accepted start puts that right.
+                // A race between the check and the start (the app left the screen in between).
+                // WorkManager still counts the work as foreground (see above), so Android's stops
+                // are ignored until the sync ends. A later request, once the app is back, restores
+                // the notification and the foreground service.
                 Log.w(TAG, "Android refused the foreground start; asking again at the next progress step", e)
                 false
             }
@@ -162,18 +165,24 @@ class SyncWorker(
                 .build()
 
         /** Whether this process may start a foreground service now (see [mayStartForegroundService]). */
-        internal fun mayStartForegroundService(): Boolean =
-            mayStartForegroundService(Build.VERSION.SDK_INT, currentImportance())
+        internal fun mayStartForegroundService(context: Context): Boolean =
+            mayStartForegroundService(Build.VERSION.SDK_INT, currentImportance(), ignoresBatteryOptimizations(context))
 
         /**
-         * Android 12+ allows a foreground service start only while the app is in the foreground
-         * (the user just tapped Sync). Earlier versions always allow it.
+         * Android 12+ allows a foreground service start from an app in the foreground (the user just
+         * tapped Sync), or from one the user took off battery optimization, which the sync screen
+         * suggests. Earlier versions always allow it.
          */
-        internal fun mayStartForegroundService(sdkInt: Int, importance: Int): Boolean =
-            sdkInt < Build.VERSION_CODES.S || importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        internal fun mayStartForegroundService(sdkInt: Int, importance: Int, ignoresBatteryOptimizations: Boolean): Boolean =
+            sdkInt < Build.VERSION_CODES.S ||
+                importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                ignoresBatteryOptimizations
 
         private fun currentImportance(): Int =
             RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
+
+        private fun ignoresBatteryOptimizations(context: Context): Boolean =
+            context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
         /** The remote to sync, or -1 when the input names none. */
         private fun remoteIdOf(inputData: Data): Int =
