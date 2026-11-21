@@ -178,8 +178,13 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
         return currentUri
     }
 
+    /**
+     * Opens [document] in mode "wt": write, truncating what was there. Plain "w" (the default)
+     * doesn't truncate with the external storage provider (seen on the Android 17 emulator), so a
+     * shorter new version would keep the old file's end.
+     */
     private fun getOutputStream(document: Uri): OutputStream {
-        return contentResolver.openOutputStream(document)
+        return contentResolver.openOutputStream(document, "wt")
             ?: throw IOException("Failed to open stream for $document")
     }
 
