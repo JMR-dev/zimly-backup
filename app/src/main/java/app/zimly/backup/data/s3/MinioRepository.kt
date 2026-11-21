@@ -161,9 +161,7 @@ class MinioRepository(
                 S3Object(name, size, checksum, modified)
             }
     } catch (e: IllegalStateException) {
-        // minio's listing iterator wraps a network error in an IllegalStateException. Hand over
-        // the IOException itself: the sync retries those.
-        throw (e.cause as? IOException) ?: e
+        throw listingFailure(e)
     }
 
     override suspend fun createBucket(bucket: String) {
@@ -360,6 +358,18 @@ interface S3Repository {
     suspend fun stat(name: String): StatObjectResponse
     suspend fun get(name: String, size: Long, openOutput: () -> OutputStream): Flow<Progress>
     suspend fun remove(name: String)
+}
+
+/**
+ * The error a failed listing ends with. minio's listing iterator turns each transport failure
+ * into an IllegalStateException that wraps the IOException, or that IOException's own cause
+ * when it has one: on Android, a DNS failure's GaiException or a socket error's ErrnoException,
+ * neither an IOException. A server's error comes as a MinioException instead. So every one of
+ * these becomes an IOException, which the sync retries.
+ */
+internal fun listingFailure(e: IllegalStateException): IOException {
+    val cause = e.cause ?: e
+    return cause as? IOException ?: IOException("Listing the bucket failed: ${cause.message}", cause)
 }
 
 /**
