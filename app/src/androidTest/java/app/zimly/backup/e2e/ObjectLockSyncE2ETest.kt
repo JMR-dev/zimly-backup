@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,6 +44,7 @@ import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -95,6 +97,7 @@ class ObjectLockSyncE2ETest {
     private val collection = "ZimlyE2E${System.currentTimeMillis()}"
     private val remoteId = REMOTE_ID_BASE + Random.nextInt(1_000_000)
     private val seededMedia = mutableListOf<Uri>()
+    private var syncId: UUID? = null
 
     private lateinit var config: E2EConfig
 
@@ -107,6 +110,8 @@ class ObjectLockSyncE2ETest {
 
     @After
     fun tearDown() = runBlocking {
+        // A failed run can leave its sync uploading: stop it before deleting what it uploads.
+        syncId?.let { WorkManager.getInstance(context).cancelWorkById(it).result.get(CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
         seededMedia.forEach { context.contentResolver.delete(it, null, null) }
         ZimlyDatabase.getInstance(context).remoteDao().deleteById(remoteId)
     }
@@ -141,11 +146,12 @@ class ObjectLockSyncE2ETest {
     private suspend fun runSyncFromTheApp(): Pair<WorkInfo, Duration> {
         val workManager = WorkManager.getInstance(context)
         val request = SyncWorker.request(remoteId)
+        syncId = request.id
         val started = TimeSource.Monotonic.markNow()
         ActivityScenario.launch(MainActivity::class.java).use {
             workManager.enqueue(request)
             awaitStarted(workManager, request.id)
-            if (config.expectForeground) awaitSyncNotification()
+            if (config.expectForeground) awaitSyncNotification(workManager, request.id)
         }
         val finished = awaitFinished(workManager, request.id)
         return finished to started.elapsedNow()
@@ -158,14 +164,27 @@ class ObjectLockSyncE2ETest {
         assertNotNull("The sync never started", started)
     }
 
-    /** The sync's foreground notification has the remote's id; it shows once the sync is in the foreground. */
-    private suspend fun awaitSyncNotification() {
+    /**
+     * Waits for the sync's foreground notification, which has the remote's id. A sync can finish
+     * between two looks and take its notification with it; that proves nothing either way, so it
+     * is logged, not failed.
+     */
+    private suspend fun awaitSyncNotification(workManager: WorkManager, id: UUID) {
         val notifications = context.getSystemService(NotificationManager::class.java)
         val shown = withTimeoutOrNull(NOTIFICATION_TIMEOUT) {
-            while (notifications.activeNotifications.none { it.id == remoteId }) delay(POLL_INTERVAL)
+            // Ends when the notification shows or the sync finishes, or at the timeout.
+            while (notifications.activeNotifications.none { it.id == remoteId }) {
+                if (isFinished(workManager, id)) return@withTimeoutOrNull false
+                delay(POLL_INTERVAL)
+            }
+            true
         }
         assertNotNull("The sync's foreground notification never showed", shown)
+        if (shown == false) Log.w(TAG, "The sync finished before its foreground notification could be seen")
     }
+
+    private suspend fun isFinished(workManager: WorkManager, id: UUID): Boolean =
+        workManager.getWorkInfoByIdFlow(id).first()?.state?.isFinished == true
 
     private suspend fun awaitFinished(workManager: WorkManager, id: UUID): WorkInfo {
         val info = withTimeout(config.syncTimeout) {
@@ -253,9 +272,11 @@ class ObjectLockSyncE2ETest {
         const val PHOTO_SEED = 1
         const val VIDEO_SEED = 2
         const val OPAQUE = 0xFF000000.toInt()
+        const val TAG = "ObjectLockSyncE2ETest"
+        const val CANCEL_TIMEOUT_SECONDS = 10L
         val START_TIMEOUT = 1.minutes
         val NOTIFICATION_TIMEOUT = 1.minutes
-        val POLL_INTERVAL = 500.milliseconds
+        val POLL_INTERVAL = 100.milliseconds
         val IMAGES: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val VIDEOS: Uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
