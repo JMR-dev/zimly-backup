@@ -43,6 +43,8 @@ class DownloadSyncService(
             val localsByPath = locales.associateBy { it.relPath }
 
             return remotes.filter { remote ->
+                // A key ending in '/' is an empty "folder" marker, not a file to download.
+                if (remote.name.endsWith("/")) return@filter false
                 val local = localsByPath[remote.name]
                 val isNewOrUpdatedRemote = local == null || local.lastModified < remote.modified.toInstant().toEpochMilli()
                 isNewOrUpdatedRemote
