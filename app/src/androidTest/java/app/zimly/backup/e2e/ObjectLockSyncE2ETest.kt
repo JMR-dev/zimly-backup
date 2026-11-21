@@ -110,10 +110,14 @@ class ObjectLockSyncE2ETest {
 
     @After
     fun tearDown() = runBlocking {
-        // A failed run can leave its sync uploading: stop it before deleting what it uploads.
-        syncId?.let { WorkManager.getInstance(context).cancelWorkById(it).result.get(CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
-        seededMedia.forEach { context.contentResolver.delete(it, null, null) }
-        ZimlyDatabase.getInstance(context).remoteDao().deleteById(remoteId)
+        try {
+            // A failed run can leave its sync uploading: cancel it first. WorkManager records the
+            // cancel at once; the worker itself may take a moment longer to stop.
+            syncId?.let { WorkManager.getInstance(context).cancelWorkById(it).result.get(CANCEL_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+        } finally {
+            seededMedia.forEach { context.contentResolver.delete(it, null, null) }
+            ZimlyDatabase.getInstance(context).remoteDao().deleteById(remoteId)
+        }
     }
 
     @Test
