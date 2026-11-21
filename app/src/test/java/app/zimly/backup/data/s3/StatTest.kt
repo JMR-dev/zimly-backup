@@ -54,6 +54,17 @@ class StatTest {
         }
     }
 
+    /**
+     * Listing the bucket is the first network call of every sync. minio's listing iterator turns a
+     * network error into an IllegalStateException that wraps it.
+     */
+    @Test
+    fun `a connection dropped during listing ends with an IO error`() {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+
+        assertFailsWith<IOException> { repository().listObjects() }
+    }
+
     // An explicit region keeps the SDK from asking the stub for the bucket's location.
     private fun repository() =
         MinioRepository(server.url("/").toString(), "key", "secret", "bucket", "us-east-1")

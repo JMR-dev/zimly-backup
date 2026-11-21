@@ -35,6 +35,7 @@ import okio.Source
 import okio.buffer
 import okio.sink
 import okio.source
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.time.ZonedDateTime
@@ -149,8 +150,8 @@ class MinioRepository(
     override suspend fun bucketExists(): Boolean =
         mc().bucketExists(BucketExistsArgs.builder().bucket(bucket).build()).await()
 
-    override fun listObjects(): List<S3Object> {
-        return mc().listObjects(ListObjectsArgs.builder().bucket(bucket).recursive(true).build())
+    override fun listObjects(): List<S3Object> = try {
+        mc().listObjects(ListObjectsArgs.builder().bucket(bucket).recursive(true).build())
             .map { it.get() }
             .map {
                 val name = it.objectName()
@@ -159,6 +160,10 @@ class MinioRepository(
                 val modified = it.lastModified()
                 S3Object(name, size, checksum, modified)
             }
+    } catch (e: IllegalStateException) {
+        // minio's listing iterator wraps a network error in an IllegalStateException. Hand over
+        // the IOException itself: the sync retries those.
+        throw (e.cause as? IOException) ?: e
     }
 
     override suspend fun createBucket(bucket: String) {
