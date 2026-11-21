@@ -103,7 +103,9 @@ class BucketViewModel(
                 if (bucketExists) "Connection successful, bucket exists!" else "Bucket does not exist!"
             notification.update { Notification(message = message, type = Notification.Type.INFO) }
         } catch (e: Exception) {
-            val cause = e.cause ?: e
+            // bucketExists() hands over the error itself, already unwrapped from minio's
+            // CompletionException: its cause would drop context, such as the host name.
+            val cause = e
             var message = cause.message
             if (cause is ErrorResponseException) {
                 cause.errorResponse().message()
