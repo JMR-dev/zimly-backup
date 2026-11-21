@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -46,10 +47,25 @@ class DocumentOverwriteTest {
     @After
     fun tearDown() {
         try {
-            if (::resolver.isInitialized) resolver.delete(folder)
+            if (::resolver.isInitialized) deleteFolder()
         } finally {
             uiAutomation.dropShellPermissionIdentity()
         }
+    }
+
+    /**
+     * The storage provider appends a type's extension to a name whose extension doesn't match the
+     * type it's created with, and the next sync wouldn't find the file under its key. A download
+     * creates documents with the type their name implies, so every name stays as it is.
+     */
+    @Test
+    fun aDownloadKeepsEveryNameExactly() {
+        val names = listOf("README", "notes.md", "data.unknownext", "photo.JPG")
+
+        names.forEach { name -> resolver.openForWriting("$folder/$name").stream.use { it.write(1) } }
+
+        val stored = resolver.listObjects().map { it.relPath }.filter { it.startsWith("$folder/") }
+        assertEquals(names.map { "$folder/$it" }.sorted(), stored.sorted())
     }
 
     @Test
@@ -64,11 +80,16 @@ class DocumentOverwriteTest {
 
     /** Writes [bytes] the way a download sync does. */
     private fun write(bytes: ByteArray) {
-        resolver.createOutputStream(path, MIME_TYPE).use { it.write(bytes) }
+        resolver.openForWriting(path).stream.use { it.write(bytes) }
     }
 
     private fun read(): ByteArray =
-        resolver.getInputStream(resolver.createOrFindDocument(path, MIME_TYPE)).use { it.readBytes() }
+        resolver.getInputStream(resolver.createOrFindDocument(path)).use { it.readBytes() }
+
+    private fun deleteFolder() {
+        val treeUri = DocumentsContract.buildTreeDocumentUri(AUTHORITY, ROOT)
+        DocumentsContract.deleteDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(treeUri, "$ROOT/$folder"))
+    }
 
     private fun providerReachable(): Boolean = try {
         context.contentResolver.acquireContentProviderClient(AUTHORITY)?.use { true } ?: false
@@ -82,7 +103,6 @@ class DocumentOverwriteTest {
         const val AUTHORITY = "com.android.externalstorage.documents"
         const val ROOT = "primary:DCIM"
         const val NAME = "file.bin"
-        const val MIME_TYPE = "application/octet-stream"
         const val OLD_SIZE = 1000
         const val NEW_SIZE = 10
     }

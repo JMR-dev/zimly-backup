@@ -5,6 +5,7 @@ import android.util.Log
 import app.zimly.backup.SILO_IMAGE
 import app.zimly.backup.readTestResource
 import app.zimly.backup.data.media.ContentObject
+import app.zimly.backup.data.media.OpenedDocument
 import app.zimly.backup.data.media.WriteableContentResolver
 import app.zimly.backup.data.s3.MinioRepository
 import app.zimly.backup.data.s3.S3Object
@@ -82,14 +83,10 @@ class DownloadSyncServiceTest {
         every { localContentResolver.listObjects() } returns emptyList()
         val out1 = ByteArrayOutputStream()
         val out2 = ByteArrayOutputStream()
-        every {
-            localContentResolver.createOutputStream(
-                any(),
-                any(),
-            )
-        } returns out1 andThen out2
+        every { localContentResolver.openForWriting(any()) } returns
+            OpenedDocument(mockk(), out1) andThen OpenedDocument(mockk(), out2)
 
-        val ss = DownloadSyncService(minioRepository, localContentResolver)
+        val ss = DownloadSyncService(minioRepository, localContentResolver, FakeDownloadsInProgress())
 
         // WHEN
         val res = ss.synchronize().toList().last()
@@ -115,7 +112,7 @@ class DownloadSyncServiceTest {
         every { localContentResolver.listObjects() } returns emptyList()
         every { minioRepository.listObjects() } throws Exception("Boom")
 
-        val ss = DownloadSyncService(minioRepository, localContentResolver)
+        val ss = DownloadSyncService(minioRepository, localContentResolver, FakeDownloadsInProgress())
 
         // WHEN
         val flow = ss.synchronize()

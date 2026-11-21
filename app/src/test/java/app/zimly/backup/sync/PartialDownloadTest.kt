@@ -1,6 +1,8 @@
 package app.zimly.backup.sync
 
+import android.net.Uri
 import android.util.Log
+import app.zimly.backup.data.media.OpenedDocument
 import app.zimly.backup.data.media.WriteableContentResolver
 import app.zimly.backup.data.s3.Progress
 import app.zimly.backup.data.s3.S3Object
@@ -35,6 +37,9 @@ class PartialDownloadTest {
     private val s3: S3Repository = mockk()
     private val local: WriteableContentResolver = mockk(relaxUnitFun = true)
 
+    /** The document the download opened; a partial file is deleted through it, not looked up by name again. */
+    private val document: Uri = mockk()
+
     @Before
     fun setUp() {
         mockkStatic(Log::class)
@@ -43,7 +48,7 @@ class PartialDownloadTest {
         every { s3.listObjects() } returns listOf(S3Object(PATH, SIZE, "etag", ZonedDateTime.now()))
         every { local.listObjects() } returns emptyList()
         coEvery { s3.stat(PATH) } returns stat()
-        every { local.createOutputStream(PATH, CONTENT_TYPE) } returns ByteArrayOutputStream()
+        every { local.openForWriting(PATH) } returns OpenedDocument(document, ByteArrayOutputStream())
     }
 
     @Test
@@ -52,7 +57,7 @@ class PartialDownloadTest {
 
         assertFailsWith<IOException> { sync() }
 
-        verify(exactly = 1) { local.delete(PATH) }
+        verify(exactly = 1) { local.delete(document) }
     }
 
     /**
@@ -65,14 +70,14 @@ class PartialDownloadTest {
 
         assertFailsWith<IOException> { sync() }
 
-        verify(exactly = 0) { local.createOutputStream(any(), any()) }
+        verify(exactly = 0) { local.openForWriting(any()) }
         verify(exactly = 0) { local.delete(any()) }
     }
 
     /** A local file that failed to open was never written to, so it is not deleted. */
     @Test
     fun `a local file that fails to open is not deleted`() = runTest {
-        every { local.createOutputStream(PATH, CONTENT_TYPE) } throws IOException("read-only file")
+        every { local.openForWriting(PATH) } throws IOException("read-only file")
         coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
 
         assertFailsWith<IOException> { sync() }
@@ -107,7 +112,7 @@ class PartialDownloadTest {
     fun `a partial file is deleted off the collector's thread`() = runTest {
         coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
         var deletedOn: Thread? = null
-        every { local.delete(PATH) } answers { deletedOn = Thread.currentThread() }
+        every { local.delete(document) } answers { deletedOn = Thread.currentThread() }
 
         assertFailsWith<IOException> { sync() }
 
@@ -117,7 +122,7 @@ class PartialDownloadTest {
     @Test
     fun `a failure to delete is attached to the download error`() = runTest {
         coEvery { s3.get(PATH, SIZE, any()) } answers { failingDownload(thirdArg()) }
-        every { local.delete(PATH) } throws IOException("read-only storage")
+        every { local.delete(document) } throws IOException("read-only storage")
 
         val error = assertFailsWith<IOException> { sync() }
 
@@ -135,7 +140,7 @@ class PartialDownloadTest {
             .flatMap { it.suppressed.asSequence() }
             .toList()
 
-    private suspend fun sync() = DownloadSyncService(s3, local, samplePeriod = 1).synchronize().toList()
+    private suspend fun sync() = DownloadSyncService(s3, local, FakeDownloadsInProgress(), samplePeriod = 1).synchronize().toList()
 
     /** Like the real download: opens the file once the server answers, writes half, then fails. */
     private fun failingDownload(openOutput: () -> OutputStream): Flow<Progress> = flow {
