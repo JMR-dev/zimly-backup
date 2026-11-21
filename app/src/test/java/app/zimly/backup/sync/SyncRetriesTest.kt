@@ -62,6 +62,19 @@ class SyncRetriesTest {
         assertEquals(199_000.milliseconds, retries.failingFor())
     }
 
+    /** A long backup that keeps finishing files isn't failing, however many blips it had. */
+    @Test
+    fun `a run that finished a file starts the failing time again`() = runBlocking {
+        now = 1_000
+        retries.retrying("connection reset", nextTryAt = 61_000)
+        now = 50_000
+        retries.progressMade()
+        retries.retrying("connection reset", nextTryAt = 110_000)
+        now = 60_000
+
+        assertEquals(10_000.milliseconds, retries.failingFor())
+    }
+
     @Test
     fun `a waiting sync shows its last error and next try`() = runBlocking {
         retries.retrying("connection reset", nextTryAt = 61_000)

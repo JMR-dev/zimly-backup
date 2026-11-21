@@ -1,6 +1,7 @@
 package app.zimly.backup.sync
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
@@ -86,7 +87,37 @@ class SyncWorkerRetryTest {
         assertEquals("connection reset", nextTry.lastError)
         // The third run (count 2) waits 4 minutes.
         assertTrue("$nextTry", nextTry.at in (before + 4.minutes.inWholeMilliseconds)..(System.currentTimeMillis() + 4.minutes.inWholeMilliseconds))
-        assertNotNull("retry notification", activeRetryNotification())
+        // The first failure of a streak alerts.
+        assertEquals(Notification.GROUP_ALERT_ALL, activeRetryNotification()?.notification?.groupAlertBehavior)
+    }
+
+    @Test
+    fun aLaterRetryUpdatesQuietly() = runBlocking<Unit> {
+        val now = System.currentTimeMillis()
+        db.syncRetryDao().recordRetry(REMOTE_ID, now - 1.hours.inWholeMilliseconds, NextTry("connection reset", now))
+        every { syncService.synchronize() } returns flow { throw IOException("connection reset") }
+
+        runSync(runAttemptCount = 4)
+
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, activeRetryNotification()?.notification?.groupAlertBehavior)
+    }
+
+    /** A long backup that keeps finishing files isn't failing, however long ago its first blip was. */
+    @Test
+    fun aRunThatFinishedAFileStartsTheFailingClockAgain() = runBlocking<Unit> {
+        val now = System.currentTimeMillis()
+        db.syncRetryDao().recordRetry(REMOTE_ID, now - 25.hours.inWholeMilliseconds, NextTry("connection reset", now))
+        every { syncService.synchronize() } returns flow {
+            emit(progress())
+            throw IOException("connection reset")
+        }
+
+        val result = runSync(runAttemptCount = 9)
+
+        assertTrue("$result", result is Result.Retry)
+        val firstFailedAt = checkNotNull(db.syncRetryDao().load(REMOTE_ID)) { "no retry recorded" }.firstFailedAt
+        assertTrue("failing since $firstFailedAt, before $now", firstFailedAt >= now)
+        assertEquals(Notification.GROUP_ALERT_ALL, activeRetryNotification()?.notification?.groupAlertBehavior)
     }
 
     @Test

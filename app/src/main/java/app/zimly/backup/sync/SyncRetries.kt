@@ -22,6 +22,12 @@ internal class SyncRetries(
     suspend fun failingFor(): Duration =
         dao.load(remoteId)?.let { (now() - it.firstFailedAt).milliseconds } ?: Duration.ZERO
 
+    /**
+     * A run finished at least one file: the sync is making progress, so earlier failures no
+     * longer count toward the limit, and its next failure starts a new streak.
+     */
+    suspend fun progressMade() = dao.delete(remoteId)
+
     /** A run failed with [error] and will be tried again, no earlier than [nextTryAt]. */
     suspend fun retrying(error: String, nextTryAt: Long) =
         dao.recordRetry(remoteId, now(), NextTry(error, nextTryAt))

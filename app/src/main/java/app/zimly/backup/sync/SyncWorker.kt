@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlin.time.Duration
 
 class SyncWorker(
     private val context: Context,
@@ -48,9 +49,11 @@ class SyncWorker(
 
         val foreground = ForegroundProgress()
         foreground.start()
+        var finishedAFile = false
 
         val result = syncService.synchronize()
             .onEach {
+                if (it.transferredFiles > 0) finishedAFile = true
                 foreground.update(it.percentage)
                 setProgressAsync(
                     Data.Builder()
@@ -78,7 +81,7 @@ class SyncWorker(
             .catch {
                 Log.e(TAG, "Failed to sync diff.", it)
 
-                emit(onError(it, retries))
+                emit(onError(it, retries, finishedAFile))
             }
             .last()
         // A sync that succeeded or failed for good is over; one waiting to retry isn't.
@@ -91,20 +94,25 @@ class SyncWorker(
 
     /**
      * Fails or retries depending on the error and on how long the sync has been failing, and
-     * says so in a notification: until the next run, nothing else shows it.
+     * says so in a notification: until the next run, nothing else shows it. A run that
+     * [finishedAFile] made progress, so the failing time starts again.
      */
-    private suspend fun onError(error: Throwable, retries: SyncRetries): Result {
-        val result = syncResultOf(error, retries.failingFor())
-        if (result.isRetry()) notifyRetrying(error, retries) else notifyFailed(result)
+    private suspend fun onError(error: Throwable, retries: SyncRetries, finishedAFile: Boolean): Result {
+        if (finishedAFile) retries.progressMade()
+        val failingFor = retries.failingFor()
+        val result = syncResultOf(error, failingFor)
+        if (result.isRetry()) notifyRetrying(error, retries, firstFailure = failingFor == Duration.ZERO) else notifyFailed(result)
         return result
     }
 
-    private suspend fun notifyRetrying(error: Throwable, retries: SyncRetries) {
+    /** Records the retry and posts its notification, which alerts only for a streak's [firstFailure]. */
+    private suspend fun notifyRetrying(error: Throwable, retries: SyncRetries, firstFailure: Boolean) {
         val message = error.message ?: error.javaClass.simpleName
         val nextTry = NextTry(message, nextTryAt(System.currentTimeMillis(), runAttemptCount))
         retries.retrying(nextTry.lastError, nextTry.at)
         val cancel = SyncCancellation.pendingIntent(applicationContext, remoteId)
-        RetryNotification.post(applicationContext, remoteId, RetryNotification.retrying(applicationContext, nextTry, cancel))
+        val notification = RetryNotification.retrying(applicationContext, nextTry, cancel, alert = firstFailure)
+        RetryNotification.post(applicationContext, remoteId, notification)
     }
 
     private fun notifyFailed(result: Result) {
