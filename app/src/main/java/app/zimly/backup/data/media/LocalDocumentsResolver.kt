@@ -113,8 +113,9 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
      * is removed again, so no empty file with a fresh timestamp is left for later syncs to skip.
      */
     override fun createOutputStream(objectPath: String, mimeType: String): OutputStream {
-        val existing = findDocument(objectPath)
-        val document = existing ?: createOrFindDocument(objectPath, mimeType)
+        val (parentUri, objectName) = createOrFindParent(objectPath)
+        val existing = getDocumentUri(parentUri, objectName)
+        val document = existing ?: createDocument(parentUri, mimeType, objectName)
         return try {
             getOutputStream(document)
         } catch (e: Exception) {
@@ -139,22 +140,22 @@ class LocalDocumentsResolver(context: Context, private val root: Uri, val docume
      * if it's missing and an empty Document with the trailing objectName and returns the [Uri].
      */
     internal fun createOrFindDocument(objectPath: String, mimeType: String): Uri {
-        val (directories, objectName) = extractPath(objectPath)
-        val rootDocUri = rootDocumentUri()
-
-        val parentUri = if (directories.isNotEmpty()) {
-            createOrFindDirectory(rootDocUri, directories)
-        } else {
-            rootDocUri
-        }
-
-        // Get existing or create new document
-        return getDocumentUri(parentUri, objectName) ?: documentsRepository.createDocument(
-            parentUri,
-            mimeType,
-            objectName
-        ) ?: throw IOException("Failed to create file in $parentUri")
+        val (parentUri, objectName) = createOrFindParent(objectPath)
+        return getDocumentUri(parentUri, objectName) ?: createDocument(parentUri, mimeType, objectName)
     }
+
+    /**
+     * The folder [objectPath]'s document goes in, with any missing folders created, and the
+     * document's name. One walk down the path: each step queries the folder's children.
+     */
+    private fun createOrFindParent(objectPath: String): Pair<Uri, String> {
+        val (directories, objectName) = extractPath(objectPath)
+        return createOrFindDirectory(rootDocumentUri(), directories) to objectName
+    }
+
+    private fun createDocument(parentUri: Uri, mimeType: String, name: String): Uri =
+        documentsRepository.createDocument(parentUri, mimeType, name)
+            ?: throw IOException("Failed to create file in $parentUri")
 
     /** Leaves the document's folders in place, even when they end up empty. */
     override fun delete(objectPath: String) {
