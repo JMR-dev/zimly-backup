@@ -17,10 +17,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.future.asDeferred
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -36,8 +38,8 @@ import okio.source
 import java.io.InputStream
 import java.io.OutputStream
 import java.time.ZonedDateTime
+import java.util.concurrent.CompletionException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration.Companion.seconds
 
@@ -105,6 +107,9 @@ class MinioRepository(
         /** How long a cancelled upload waits for minio to abort, see [putObject]. */
         private val CANCEL_SETTLE_TIMEOUT = 30.seconds
 
+        /** How much a download reads between checks for a cancel. */
+        private const val COPY_CHUNK_BYTES = 64L * 1024
+
         /**
          * Creates a http client with optional [UploadProgressInterceptor].
          *
@@ -137,18 +142,12 @@ class MinioRepository(
     }
 
 
-    override suspend fun bucketExists(): Boolean {
-        return suspendCancellableCoroutine { continuation ->
-            val param = BucketExistsArgs.builder().bucket(bucket).build()
-            mc().bucketExists(param).whenComplete { result, exception ->
-                if (exception == null) {
-                    continuation.resume(result)
-                } else {
-                    continuation.resumeWithException(exception)
-                }
-            }
-        }
-    }
+    // kotlinx's await() below unwraps the CompletionException minio's futures fail with, so a
+    // network failure reaches the sync as the IOException it retries, and a cancelled caller
+    // cancels the call.
+
+    override suspend fun bucketExists(): Boolean =
+        mc().bucketExists(BucketExistsArgs.builder().bucket(bucket).build()).await()
 
     override fun listObjects(): List<S3Object> {
         return mc().listObjects(ListObjectsArgs.builder().bucket(bucket).recursive(true).build())
@@ -163,47 +162,13 @@ class MinioRepository(
     }
 
     override suspend fun createBucket(bucket: String) {
-        return suspendCancellableCoroutine { continuation ->
-            mc().makeBucket(MakeBucketArgs.builder().bucket(bucket).build())
-                .whenComplete { _, exception ->
-                    if (exception == null) {
-                        continuation.resume(Unit)
-                    } else {
-                        continuation.resumeWithException(exception)
-                    }
-                }
-        }
+        mc().makeBucket(MakeBucketArgs.builder().bucket(bucket).build()).await()
     }
 
-    override suspend fun stat(name: String): StatObjectResponse {
-        return suspendCancellableCoroutine { continuation ->
+    override suspend fun stat(name: String): StatObjectResponse =
+        mc().statObject(StatObjectArgs.builder().`object`(name).bucket(bucket).build()).await()
 
-            val params = StatObjectArgs.builder().`object`(name).bucket(bucket).build()
-
-            mc().statObject(params).whenComplete { result, exception ->
-                if (exception == null) {
-                    continuation.resume(result)
-                } else {
-                    continuation.resumeWithException(exception)
-                }
-            }
-        }
-    }
-
-    override suspend fun get(name: String): GetObjectResponse {
-        return suspendCancellableCoroutine { continuation ->
-
-            val params = GetObjectArgs.builder().bucket(bucket).`object`(name).build()
-
-            mc().getObject(params).whenComplete { result, exception ->
-                if (exception == null) {
-                    continuation.resume(result)
-                } else {
-                    continuation.resumeWithException(exception)
-                }
-            }
-        }
-    }
+    override suspend fun get(name: String): GetObjectResponse = getObject(name)
 
     /**
      * Downloads a file from S3 and tracks the [Progress].
@@ -225,59 +190,57 @@ class MinioRepository(
                 progressTracker.observe().collect { send(it) }
             }
 
-            // use { } closes the passed stream on success and on any failure, a refused request's too.
+            // use { } closes the passed stream and the response on success and on any failure,
+            // a refused request's and a cancel's included. A failure ends the flow with that
+            // error, which also cancels the progress observer.
             stream.use { output ->
-                val response = getObject(name)
-                // On the IO dispatcher. A failure ends the flow with that error, which also
-                // cancels the progress observer.
-                withContext(Dispatchers.IO) {
-                    response.source().use { rawSource ->
-                        output.sink().buffer().use { sink ->
-                            // do not waste I/O resources on cancelled work
-                            ensureActive()
-                            sink.writeAll(rawSource.counted(progressTracker))
-                            sink.flush()
-                        }
-                    }
+                getObject(name).use { response ->
+                    withContext(Dispatchers.IO) { copyBody(response, output, progressTracker) }
                 }
             }
 
-            // Wait for progress to finish naturally (progressTracker.observe completes on 100%)
+            // The body is done: end observing, even short of the size given (the object shrank
+            // after it was stat'ed), then let the last progress through.
+            progressTracker.finish()
             progressJob.join()
         }
 
-    /** Suspends until minio's getObject call answers. Cancelling the caller cancels the call. */
+    /**
+     * Copies the response body to [output], counting each read. It checks for cancellation between
+     * reads, so a cancelled download stops within one read instead of reading on to the end.
+     */
+    private suspend fun copyBody(response: GetObjectResponse, output: OutputStream, tracker: ProgressTracker) {
+        val body = response.source().counted(tracker)
+        output.sink().buffer().use { sink ->
+            while (true) { // Ends at the end of the body, or at a cancel.
+                currentCoroutineContext().ensureActive()
+                if (body.read(sink.buffer, COPY_CHUNK_BYTES) == -1L) break
+                sink.emitCompleteSegments()
+            }
+            sink.flush()
+        }
+    }
+
+    /**
+     * Waits for minio's getObject call like kotlinx's await(): the failure's cause is unwrapped
+     * from minio's CompletionException, and cancelling the caller cancels the call. A response
+     * that arrives after a cancel is closed instead of leaking its connection.
+     */
     private suspend fun getObject(name: String): GetObjectResponse =
         suspendCancellableCoroutine { continuation ->
-            val params = GetObjectArgs.builder().bucket(bucket).`object`(name).build()
-            val future = mc().getObject(params)
-
-            future.whenComplete { result, exception ->
-                if (exception != null) {
-                    continuation.resumeWithException(exception)
+            val future = mc().getObject(GetObjectArgs.builder().bucket(bucket).`object`(name).build())
+            future.whenComplete { response, failure ->
+                if (failure != null) {
+                    continuation.resumeWithException((failure as? CompletionException)?.cause ?: failure)
                 } else {
-                    continuation.resume(result)
+                    continuation.resume(response) { _, dropped, _ -> dropped.close() }
                 }
             }
-
-            continuation.invokeOnCancellation {
-                future.cancel(true)
-            }
+            continuation.invokeOnCancellation { future.cancel(true) }
         }
 
     override suspend fun remove(name: String) {
-        return suspendCancellableCoroutine { continuation ->
-
-            val params = RemoveObjectArgs.builder().bucket(bucket).`object`(name).build()
-
-            mc().removeObject(params).whenComplete { _, exception ->
-                if (exception == null) {
-                    continuation.resume(Unit)
-                } else {
-                    continuation.resumeWithException(exception)
-                }
-            }
-        }
+        mc().removeObject(RemoveObjectArgs.builder().bucket(bucket).`object`(name).build()).await()
     }
 
     fun removeAll() {
@@ -324,6 +287,8 @@ class MinioRepository(
             Log.i(TAG, "Retrying $name with an uppercase checksum algorithm: ${e.message}")
             openStream().use { UppercaseChecksumUpload(client, bucket).upload(it, name, contentType, size) }
         }
+        // The upload is done: end observing even if dropped steps left it short of 100%.
+        progressTracker.finish()
     }
 
     /**
