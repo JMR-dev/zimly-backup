@@ -82,7 +82,7 @@ class ProgressTest {
 
         // Ensure we read the body!
         response.body?.source()?.use { source ->
-            val countedSource = source.counted(progress).buffer()
+            val countedSource = source.counted(progress::stepBy).buffer()
             while (!countedSource.exhausted()) {
                 countedSource.readByteArray()
             }

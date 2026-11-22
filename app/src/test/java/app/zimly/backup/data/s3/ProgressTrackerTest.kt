@@ -1,19 +1,44 @@
 package app.zimly.backup.data.s3
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.hamcrest.CoreMatchers.`is`
+import org.hamcrest.CoreMatchers.nullValue
 import org.hamcrest.MatcherAssert
 import org.junit.Test
+import kotlin.concurrent.thread
 import kotlin.time.Duration.Companion.seconds
 
 class ProgressTrackerTest {
+
+    /**
+     * With parts uploading in parallel, two OkHttp threads report steps at once. A step that took
+     * its running total first but was emitted second would make progress go backwards, and the
+     * sync would add a negative byte count.
+     */
+    @Test
+    fun stepsFromTwoThreadsNeverGoBackwards() = runBlocking<Unit> {
+        val stepsPerThread = 20_000
+        val tracker = ProgressTracker(2L * stepsPerThread)
+        // UNDISPATCHED subscribes before the first step, so nothing is missed at the start.
+        val observed = async(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) { tracker.observe().toList() }
+
+        List(2) { thread { repeat(stepsPerThread) { tracker.stepBy(1) } } }.forEach { it.join() }
+        tracker.finish()
+
+        val totals = withTimeout(10.seconds) { observed.await() }.map { it.totalReadBytes }
+        MatcherAssert.assertThat(totals.zipWithNext().firstOrNull { (a, b) -> b < a }, `is`(nullValue()))
+        MatcherAssert.assertThat(totals.last(), `is`(2L * stepsPerThread))
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test

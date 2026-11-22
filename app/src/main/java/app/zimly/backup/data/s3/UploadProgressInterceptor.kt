@@ -22,16 +22,18 @@ import okio.buffer
  * https://github.com/square/okhttp/blob/master/samples/guide/src/main/java/okhttp3/recipes/Progress.java
  */
 internal class UploadProgressInterceptor(
-    private val progressTracker: ProgressTracker,
+    /** The tracker of the upload in flight, read per request; null when no upload is running. */
+    private val currentTracker: () -> ProgressTracker?,
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
+        val tracker = currentTracker() ?: return chain.proceed(chain.request())
         val req = wrapRequest(chain.request())
         val res = chain.proceed(req)
 
         // TODO could we wrap the response instead? Does it carry bytesRead somehow?
         if (req.body is ProgressRequestBody && res.isSuccessful) {
-            progressTracker.stepBy((req.body as ProgressRequestBody).read)
+            tracker.stepBy((req.body as ProgressRequestBody).read)
         }
 
         return res
@@ -56,7 +58,9 @@ internal class ProgressRequestBody(
     override fun contentType(): MediaType? = delegate.contentType()
     override fun contentLength(): Long = delegate.contentLength()
 
+    /** Counts what this attempt sends: OkHttp writes the body again when it retries a request. */
     override fun writeTo(sink: BufferedSink) {
+        read = 0
         val countingSink = CountingSink(sink).buffer()
         delegate.writeTo(countingSink)
         countingSink.flush()

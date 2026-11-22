@@ -81,6 +81,19 @@ class ObjectLockUploadTest(private val scheme: String) {
         assertUploadStored(ObjectLockS3Stub(objectLockEnabled = true), randomBytes(12 * 1024 * 1024))
     }
 
+    /**
+     * Sent one at a time, each part waits for the last one's server commit and round trip. Two at
+     * once overlap those waits; more would hold more part buffers (about 8 MiB each) in memory.
+     */
+    @Test
+    fun `parts go up two at a time`() = runTest {
+        val stub = ObjectLockS3Stub(objectLockEnabled = true, partDelayMillis = PART_DELAY_MILLIS)
+
+        assertUploadStored(stub, randomBytes(4 * FIVE_MIB))
+
+        assertEquals(2, stub.maxPartsInFlight.get())
+    }
+
     @Test
     fun `unlocked bucket accepts a small upload`() = runTest {
         assertUploadStored(ObjectLockS3Stub(objectLockEnabled = false), randomBytes(1024))
@@ -219,6 +232,7 @@ class ObjectLockUploadTest(private val scheme: String) {
 
     companion object {
         private const val FIVE_MIB = 5 * 1024 * 1024
+        private const val PART_DELAY_MILLIS = 300L
         private const val HTTPS = "https"
         private const val NAME = "folder/object.bin"
         private const val CONTENT_TYPE = "image/png"

@@ -38,7 +38,14 @@ class ObjectLockS3Stub(
     private val uppercaseAlgorithmOnly: Boolean = false,
     private val failPart: Int? = null,
     private val holdPart: Int? = null,
+    /** How long each part's request is held before it's answered, so overlapping parts show. */
+    private val partDelayMillis: Long = 0,
 ) : Dispatcher() {
+
+    private val partsInFlight = AtomicInteger()
+
+    /** The most part requests the stub was handling at once. */
+    val maxPartsInFlight = AtomicInteger()
 
     data class StoredObject(val bytes: ByteArray, val contentType: String?)
 
@@ -114,9 +121,21 @@ class ObjectLockS3Stub(
             partHeld.countDown()
             releasePart.await(HOLD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
+        holdForOverlap()
         integrityError(request, body)?.let { return it }
         upload.parts[partNumber] = body
         return accepted(request, body)
+    }
+
+    /** Counts this part as in flight for [partDelayMillis], recording the most at once. */
+    private fun holdForOverlap() {
+        val inFlight = partsInFlight.incrementAndGet()
+        maxPartsInFlight.accumulateAndGet(inFlight, ::maxOf)
+        try {
+            if (partDelayMillis > 0) Thread.sleep(partDelayMillis)
+        } finally {
+            partsInFlight.decrementAndGet()
+        }
     }
 
     private fun completeUpload(request: RecordedRequest, url: HttpUrl, uploadId: String): MockResponse {
