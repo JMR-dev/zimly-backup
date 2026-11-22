@@ -58,7 +58,9 @@ internal class ProgressRequestBody(
     override fun contentType(): MediaType? = delegate.contentType()
     override fun contentLength(): Long = delegate.contentLength()
 
+    /** Counts what this attempt sends: OkHttp writes the body again when it retries a request. */
     override fun writeTo(sink: BufferedSink) {
+        read = 0
         val countingSink = CountingSink(sink).buffer()
         delegate.writeTo(countingSink)
         countingSink.flush()

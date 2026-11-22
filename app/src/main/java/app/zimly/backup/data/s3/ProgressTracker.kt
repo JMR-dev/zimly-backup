@@ -37,8 +37,15 @@ class ProgressTracker(private val size: Long) {
     // https://stackoverflow.com/questions/70935356/how-can-i-calculate-min-max-average-of-continuous-flow-in-kotlin
     // https://docs.oracle.com/javase/8/docs/api/java/util/DoubleSummaryStatistics.html
 
+    /**
+     * Steps can come from two threads at once (parts uploading in parallel). Taking the running
+     * total and emitting it happen together, so a lower total is never emitted after a higher one,
+     * which would make progress go backwards. tryEmit never blocks, so the lock is held briefly.
+     */
     fun stepBy(read: Long) {
-        progressFlow.tryEmit(Step.Read(transferred.addAndGet(read), timeSource.markNow()))
+        synchronized(this) {
+            progressFlow.tryEmit(Step.Read(transferred.addAndGet(read), timeSource.markNow()))
+        }
     }
 
     /**

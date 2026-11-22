@@ -332,6 +332,7 @@ class MinioRepository(
             }
         } finally {
             uploadInFlight.set(null)
+            uploadCalls.reset()
         }
         // The upload is done: end observing even if dropped steps left it short of 100%.
         progressTracker.finish()
@@ -342,10 +343,12 @@ class MinioRepository(
      *
      * minio aborts a failed multipart upload in a handler on the future putObject returns, and a
      * cancelled future never runs that handler. So this waits without cancelling the future. If
-     * the caller is cancelled, it stops the source and cancels the parts in flight (minio reads
-     * parts ahead, so the source alone may never be read again); minio fails and aborts, and this
-     * waits for that (up to [CANCEL_SETTLE_TIMEOUT]) before the caller closes the stream. A cancel
-     * after every part is sent can't stop it: that upload completes.
+     * the caller is cancelled, it cancels the part uploads in flight, and any that start later
+     * (minio reads parts ahead, so the source alone may never be read again), and stops the source;
+     * minio fails and aborts, and this waits for that (up to [CANCEL_SETTLE_TIMEOUT]) before the
+     * caller closes the stream. Only part uploads are cancelled (see [UploadCalls]), so minio's
+     * abort, and a CompleteMultipartUpload already on its way, go ahead. A source that fails on
+     * its own cancels the part uploads the same way before minio aborts.
      */
     private suspend fun putObject(
         client: MinioAsyncClient,
@@ -354,14 +357,15 @@ class MinioRepository(
         contentType: String,
         size: Long
     ) {
-        val source = StoppableInputStream(stream)
+        val source = StoppableInputStream(stream) { uploadCalls.cancelInFlight() }
         val args = PutObjectArgs.builder()
             .bucket(bucket)
             .`object`(name)
             .contentType(contentType)
             .stream(source, size, -1)
             // Two parts at once overlap one part's server commit and round trip with the next
-            // part's transfer; each holds a part buffer (about 8 MiB) in memory, so not more.
+            // part's transfer. minio holds up to 2 × parts + 1 part buffers (2 uploading, 2
+            // queued, 1 being read), each about 8 MiB for a 5 MiB part: about 40 MiB, so not more.
             .parallelUploads(PARALLEL_PARTS)
             .build()
         // asDeferred: awaiting the Deferred can be cancelled without cancelling minio's future.
@@ -369,8 +373,8 @@ class MinioRepository(
         try {
             upload.await()
         } catch (e: CancellationException) {
-            source.stop()
             uploadCalls.cancelInFlight()
+            source.stop()
             waitForMinioToSettle(upload)
             throw e
         }
